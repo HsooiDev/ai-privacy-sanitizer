@@ -1,0 +1,34 @@
+# CRITICAL SECURITY: Never commit local sensitive dictionary or mapping logs!
+config.json
+*.local.json
+*secret*
+*.key
+*.pem
+
+# Python virtual environment & bytecode
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing & packaging
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.spec
+*.egg-info/
+*.exe
+assets/
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

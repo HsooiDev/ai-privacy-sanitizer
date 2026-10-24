@@ -1,0 +1,32 @@
+{
+  "language": "zh",
+  "theme": "dark",
+  "semantic_ip_mode": false,
+  "auto_sanitize_clipboard": false,
+  "hotkeys": {
+    "sanitize": "alt+s",
+    "restore": "alt+r"
+  },
+  "custom_dictionary": {
+    "COMPANY": [
+      "Acme Global Technologies Sdn Bhd",
+      "Acme Global",
+      "南洋星辰数码私人有限公司",
+      "星辰数码"
+    ],
+    "CLIENT": [
+      "MegaCorp Bank Berhad",
+      "MegaCorp",
+      "太平洋远航物流集团"
+    ],
+    "PROJECT": [
+      "Project-Hyperion-V2",
+      "Project-Hyperion",
+      "KL-Core-Banking-V3"
+    ],
+    "CUSTOM_SECRET": [
+      "INTERNAL-DEPLOY-PASSPHRASE-9981",
+      "prod-master-db-01.kl-dc.internal.local"
+    ]
+  }
+}
