@@ -24,14 +24,28 @@ def luhn_checksum_valid(card_str: str) -> bool:
 
 
 def my_nric_valid(nric_str: str) -> bool:
-    """Validate Malaysian MyKad NRIC (month 01-12, day 01-31, and valid Place of Birth PB codes)."""
+    """Validate Malaysian MyKad NRIC (month 01-12, valid max days per month, and valid Place of Birth PB codes)."""
     digits = re.sub(r"[\s\-]", "", str(nric_str or ""))
     if not digits.isdigit() or len(digits) != 12:
         return False
     mm = int(digits[2:4])
     dd = int(digits[4:6])
     pb = int(digits[6:8])
-    if not (1 <= mm <= 12 and 1 <= dd <= 31):
+    max_days = {
+        1: 31,
+        2: 29,
+        3: 31,
+        4: 30,
+        5: 31,
+        6: 30,
+        7: 31,
+        8: 31,
+        9: 30,
+        10: 31,
+        11: 30,
+        12: 31,
+    }
+    if mm not in max_days or not (1 <= dd <= max_days[mm]):
         return False
     valid_pb = (
         (1 <= pb <= 16)
@@ -296,9 +310,7 @@ def _compile_rules() -> List[SanitizeRule]:
         SanitizeRule(
             name="my_nric",
             category="ID_CARD",
-            pattern=re.compile(
-                r"\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-\d{2}-\d{4}\b"
-            ),
+            pattern=re.compile(r"\b\d{6}-\d{2}-\d{4}\b"),
             placeholder_template="[ID_CARD_{index}]",
             validator=my_nric_valid,
         ),

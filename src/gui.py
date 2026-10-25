@@ -92,6 +92,10 @@ class GuiController:
         """Request the GUI window to appear and open the built-in JSON editor modal."""
         self._cmd_queue.put("SHOW_JSON")
 
+    def request_refresh(self) -> None:
+        """Request the GUI window to refresh all stats and vault lists on the main UI thread."""
+        self._cmd_queue.put("REFRESH")
+
     def shutdown(self) -> None:
         """Request the CustomTkinter loop to terminate cleanly."""
         self._cmd_queue.put("QUIT")
@@ -132,6 +136,8 @@ class GuiController:
                     elif cmd == "SHOW_JSON":
                         app_win.present()
                         app_win.open_in_app_json_modal()
+                    elif cmd == "REFRESH":
+                        app_win.refresh_all()
                     elif cmd == "QUIT":
                         root.quit()
                         root.destroy()
@@ -1609,15 +1615,20 @@ class _ModernControlCenter:
             ).pack(side="right", padx=8, pady=5)
 
     @staticmethod
-    def _mask_secret_preview(value: str) -> str:
-        """Mask the middle of a sensitive string (e.g. `sk-proj-***MNO678`) to prevent screen-share leaks."""
-        s = value.replace("\n", " ").strip()
+    def _mask_secret(val: str) -> str:
+        """Mask the middle of a sensitive string to prevent screen-share leaks (including short 3-4 char PINs)."""
+        s = val.replace("\n", " ").strip()
         n = len(s)
         if n <= 4:
-            return "*" * n
-        if n <= 10:
-            return f"{s[:2]}***{s[-2:]}"
-        return f"{s[:6]}***{s[-4:]}"
+            return "•" * n
+        if n <= 8:
+            return f"{s[0]}{'•' * (n - 2)}{s[-1]}"
+        return f"{s[:3]}••••••{s[-2:]}"
+
+    @staticmethod
+    def _mask_secret_preview(value: str) -> str:
+        """Alias for `_mask_secret`."""
+        return _ModernControlCenter._mask_secret(value)
 
     def _on_toggle_reveal_vault(self) -> None:
         self._reveal_vault_originals = bool(self.var_reveal_vault.get())

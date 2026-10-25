@@ -531,7 +531,8 @@
       var month = parseInt(digits.substring(2, 4), 10);
       var day = parseInt(digits.substring(4, 6), 10);
       var pb = parseInt(digits.substring(6, 8), 10);
-      if (month < 1 || month > 12 || day < 1 || day > 31) {
+      var maxDays = { 1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31 };
+      if (!maxDays[month] || day < 1 || day > maxDays[month]) {
         return false;
       }
       return Boolean(VALID_MY_PB_CODES[pb]);
@@ -548,12 +549,21 @@
       return false;
     }
 
+    function repeatBullet(count) {
+      var out = "";
+      for (var i = 0; i < count; i++) {
+        out += "•";
+      }
+      return out;
+    }
+
     function maskSecretPreview(secretText) {
       if (!secretText) return "";
-      var len = secretText.length;
-      if (len <= 4) return "****";
-      if (len <= 10) return secretText.substring(0, 2) + "***" + secretText.substring(len - 2);
-      return secretText.substring(0, 6) + "***" + secretText.substring(len - 4);
+      var s = secretText.replace(/\n/g, " ").trim();
+      var len = s.length;
+      if (len <= 4) return repeatBullet(len);
+      if (len <= 8) return s.charAt(0) + repeatBullet(len - 2) + s.charAt(len - 1);
+      return s.substring(0, 3) + "••••••" + s.substring(len - 2);
     }
 
     function escapeHtml(str) {

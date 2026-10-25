@@ -482,9 +482,12 @@ def test_undo_stack_and_vault_secret_masking(temp_config_dir):
 
     app.clear_session_map()
     assert len(app._clipboard_undo_stack) == 0
+    assert app.gui._cmd_queue.get_nowait() == "REFRESH"
 
+    assert _ModernControlCenter._mask_secret("1234") == "••••"
+    assert _ModernControlCenter._mask_secret("abcd12") == "a••••2"
     masked = _ModernControlCenter._mask_secret_preview("sk-proj-abc123XYZ789def456GHI012jkl345MNO678")
-    assert masked == "sk-pro***O678"
+    assert masked == "sk-••••••78"
     assert "abc123XYZ789" not in masked
 
 
@@ -541,3 +544,50 @@ def test_web_single_file_edition_integrity():
     assert "localStorage." not in html
     assert "sessionStorage." not in html
     assert "document.cookie" not in html
+
+
+def test_v031_nric_dates_stage2_boundary_and_vault_file(temp_config_dir, monkeypatch, capsys, tmp_path):
+    config_path, example_path = temp_config_dir
+    sanitizer = PrivacySanitizer(config_path=config_path, example_config_path=example_path)
+
+    # 1. LICENSE file exists
+    license_path = Path(__file__).resolve().parent.parent / "LICENSE"
+    assert license_path.exists()
+    assert "MIT License" in license_path.read_text(encoding="utf-8")
+
+    # 2. Strict calendar days per month in my_nric_valid & 12-digit timestamp immunity
+    assert my_nric_valid("900231-14-5521") is False  # Feb 31 is invalid
+    assert my_nric_valid("900431-14-5521") is False  # Apr 31 is invalid
+    assert my_nric_valid("900229-14-5521") is True   # Feb 29 is valid
+
+    ts_res = sanitizer.sanitize("OrderTimestamp: 261024081234 InvalidDateIC: 900231-14-5521")
+    assert "261024081234" in ts_res.sanitized_text
+    assert "900231-14-5521" in ts_res.sanitized_text
+
+    # 3. Stage 2 Fuzzy Restore boundary: semantic unbracketed values are strictly case-sensitive in Stage 1
+    sanitizer.set_semantic_ip_mode(True)
+    sem_res = sanitizer.sanitize("Path: /Users/local_profile/app.py")
+    assert "/Users/dev_user_1/app.py" in sem_res.sanitized_text
+
+    # Uppercase constant DEV_USER_1 in code must NOT be overwritten by Stage 2
+    code_snippet = "const DEV_USER_1 = 'constant'; path = '/Users/dev_user_1/app.py';"
+    restored_sem = sanitizer.restore(code_snippet)
+    assert "const DEV_USER_1 = 'constant';" in restored_sem.restored_text
+    assert "path = '/Users/local_profile/app.py';" in restored_sem.restored_text
+
+    # 4. CLI --vault-file cross-process sanitization and restoration
+    vault_file = tmp_path / "cli_vault.json"
+    raw_cli = "SECRET_TOKEN=sk-proj-9876543210abcdef9876543210"
+    sanitizer_proc1 = PrivacySanitizer(config_path=config_path, example_config_path=example_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(raw_cli))
+    assert main(["--stdin", "--vault-file", str(vault_file)], sanitizer=sanitizer_proc1) == 0
+    san_out = capsys.readouterr().out
+    assert "<API_KEY_1>" in san_out
+    assert vault_file.exists()
+
+    # Second separate sanitizer instance restores using --vault-file
+    sanitizer_proc2 = PrivacySanitizer(config_path=config_path, example_config_path=example_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(san_out))
+    assert main(["--restore-stdin", "--vault-file", str(vault_file)], sanitizer=sanitizer_proc2) == 0
+    res_out = capsys.readouterr().out
+    assert res_out == raw_cli

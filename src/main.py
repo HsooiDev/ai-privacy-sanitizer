@@ -220,6 +220,7 @@ class SanitizerTrayApp:
                 except Exception as exc:
                     self.notify(self._t("notify_clip_write_err").format(err=exc))
                     return
+                self.gui.request_refresh()
 
             self.notify(result.format_summary(self.sanitizer.language))
 
@@ -244,6 +245,7 @@ class SanitizerTrayApp:
                 except Exception as exc:
                     self.notify(self._t("notify_clip_write_err").format(err=exc))
                     return
+                self.gui.request_refresh()
 
             self.notify(result.format_summary(self.sanitizer.language))
 
@@ -257,6 +259,7 @@ class SanitizerTrayApp:
             try:
                 self._last_written_clipboard = previous_raw
                 _safe_clipboard_copy(previous_raw)
+                self.gui.request_refresh()
                 self.notify(
                     self._t("notify_undo_ok").format(left=len(self._clipboard_undo_stack))
                 )
@@ -296,6 +299,7 @@ class SanitizerTrayApp:
         with self._action_lock:
             self._clipboard_undo_stack.clear()
         cleared = self.sanitizer.clear_session()
+        self.gui.request_refresh()
         self.notify(self._t("notify_vault_cleared").format(count=cleared))
 
     def exit_app(self, *_args) -> None:
@@ -354,6 +358,7 @@ class SanitizerTrayApp:
                             self._last_written_clipboard = res.sanitized_text
                             last_seen = res.sanitized_text
                             _safe_clipboard_copy(res.sanitized_text)
+                            self.gui.request_refresh()
                             summary_body = res.format_summary(self.sanitizer.language)[1:]
                             self.notify(self._t("notify_cruise_hit").format(summary=summary_body))
                         except Exception:
@@ -550,6 +555,12 @@ def main(
         default="",
         help="Optional path to output file (used with --file; defaults to stdout if omitted)",
     )
+    parser.add_argument(
+        "--vault-file",
+        type=str,
+        default="",
+        help="Optional path to save/load session vault mappings for cross-process CLI restoration",
+    )
     args = parser.parse_args(argv)
 
     if args.export_ico:
@@ -562,10 +573,15 @@ def main(
     if args.stdin or args.restore_stdin or args.file:
         _configure_stdio_utf8()
         active_sanitizer = sanitizer or PrivacySanitizer()
+        vault_path = Path(args.vault_file) if args.vault_file else None
+        if vault_path is not None and vault_path.exists():
+            active_sanitizer.vault.load_from_file(vault_path)
 
         if args.stdin:
             raw_input = sys.stdin.read() if sys.stdin is not None else ""
             san_res = active_sanitizer.sanitize(raw_input)
+            if vault_path is not None:
+                active_sanitizer.vault.save_to_file(vault_path)
             if sys.stdout is not None:
                 sys.stdout.write(san_res.sanitized_text)
                 sys.stdout.flush()
@@ -589,6 +605,8 @@ def main(
             in_path = Path(args.file)
             raw_input = in_path.read_text(encoding="utf-8")
             san_res = active_sanitizer.sanitize(raw_input)
+            if vault_path is not None:
+                active_sanitizer.vault.save_to_file(vault_path)
             if args.output:
                 out_path = Path(args.output)
                 out_path.parent.mkdir(parents=True, exist_ok=True)

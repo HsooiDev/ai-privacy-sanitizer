@@ -217,6 +217,63 @@ class SessionVault:
         items.sort(key=lambda item: len(item[0]), reverse=True)
         return items
 
+    def save_to_file(self, path: Path) -> None:
+        """Export current session mappings to a JSON file (used only when --vault-file is passed in CLI)."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            payload = {
+                "original_to_placeholder": dict(self._original_to_placeholder),
+                "placeholder_to_original": dict(self._placeholder_to_original),
+                "original_to_category": dict(self._original_to_category),
+                "category_counters": dict(self._category_counters),
+                "total_intercepted_hits": self._total_intercepted_hits,
+            }
+        target.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def load_from_file(self, path: Path) -> None:
+        """Load session mappings from a JSON file (used only when --vault-file is passed in CLI)."""
+        source = Path(path)
+        if not source.exists():
+            return
+        raw = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return
+        with self._lock:
+            orig_to_ph = raw.get("original_to_placeholder", {})
+            ph_to_orig = raw.get("placeholder_to_original", {})
+            orig_to_cat = raw.get("original_to_category", {})
+            counters = raw.get("category_counters", {})
+            if isinstance(orig_to_ph, dict):
+                self._original_to_placeholder.update(
+                    {str(k): str(v) for k, v in orig_to_ph.items()}
+                )
+            if isinstance(ph_to_orig, dict):
+                self._placeholder_to_original.update(
+                    {str(k): str(v) for k, v in ph_to_orig.items()}
+                )
+            if isinstance(orig_to_cat, dict):
+                self._original_to_category.update(
+                    {str(k): str(v) for k, v in orig_to_cat.items()}
+                )
+            if isinstance(counters, dict):
+                for k, v in counters.items():
+                    try:
+                        self._category_counters[str(k)] = max(
+                            self._category_counters.get(str(k), 0), int(v)
+                        )
+                    except Exception:
+                        pass
+            try:
+                self._total_intercepted_hits += max(
+                    0, int(raw.get("total_intercepted_hits", 0))
+                )
+            except Exception:
+                pass
+
 
 class PrivacySanitizer:
     """Two-layer privacy sanitization and restoration engine."""
@@ -681,27 +738,26 @@ class PrivacySanitizer:
                 working_text = working_text.replace(ph, sentinel)
                 restored_count += occurrences
 
-        # Stage 2: Fuzzy & Case-Insensitive Replacement for AI-mutated placeholders
+        # Stage 2: Fuzzy & Case-Insensitive Replacement for AI-mutated bracketed placeholders only
         for idx, (ph, orig, _) in enumerate(placeholders, start=1):
             sentinel = f"\x00\x02__RES_ORIG_{idx}__\x02\x00"
             core = ph[1:-1] if len(ph) > 2 and ph[0] in "[<{" and ph[-1] in "]}>" else ""
-            if core and re.match(r"^[A-Za-z0-9_]+_\d+$", core):
-                esc_core = re.escape(core)
-                fuzzy_rx = re.compile(
-                    r"(?i)(?:&lt;\s*"
-                    + esc_core
-                    + r"\s*&gt;|\[\s*"
-                    + esc_core
-                    + r"\s*\]|<\s*"
-                    + esc_core
-                    + r"\s*>|\{\s*"
-                    + esc_core
-                    + r"\s*\}|`\s*"
-                    + esc_core
-                    + r"\s*`)"
-                )
-            else:
-                fuzzy_rx = re.compile(r"(?i)\b" + re.escape(ph) + r"\b")
+            if not (core and re.match(r"^[A-Za-z0-9_]+_\d+$", core)):
+                continue
+            esc_core = re.escape(core)
+            fuzzy_rx = re.compile(
+                r"(?i)(?:&lt;\s*"
+                + esc_core
+                + r"\s*&gt;|\[\s*"
+                + esc_core
+                + r"\s*\]|<\s*"
+                + esc_core
+                + r"\s*>|\{\s*"
+                + esc_core
+                + r"\s*\}|`\s*"
+                + esc_core
+                + r"\s*`)"
+            )
 
             def _fuzzy_sub(match: re.Match, s_tok: str = sentinel, o_val: str = orig) -> str:
                 nonlocal restored_count

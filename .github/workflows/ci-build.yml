@@ -82,7 +82,7 @@ jobs:
 
       - name: Package standalone windowed AI-Privacy-Sanitizer.exe
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "AI-Privacy-Sanitizer" --icon "assets/icon.ico" --collect-all customtkinter --hidden-import plyer.platforms.win.notification src/main.py
+          pyinstaller --noconfirm --onefile --windowed --name "AI-Privacy-Sanitizer" --icon "assets/icon.ico" --collect-all customtkinter --hidden-import plyer.platforms.win.notification --exclude-module pytest --exclude-module unittest --exclude-module pdb --exclude-module pydoc src/main.py
 
       - name: Upload Release Asset to GitHub Releases
         uses: softprops/action-gh-release@v2

@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ AI Privacy Sanitizer (AI 隐私脱敏卫士) `v0.3.0`
+# 🛡️ AI Privacy Sanitizer (AI 隐私脱敏卫士) `v0.3.1`
 
 **100% 纯本地内存运行 · 零外部网络请求 · 可视化 GUI 控制中心 · 双向无损还原的系统剪贴板与 CLI 脱敏工具**
 

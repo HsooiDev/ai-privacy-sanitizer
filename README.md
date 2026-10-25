@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ AI Privacy Sanitizer `v0.3.0`
+# 🛡️ AI Privacy Sanitizer `v0.3.1`
 
 **100% Local In-Memory · Zero Network Requests · Visual GUI Control Center · Lossless Bidirectional Clipboard & CLI Sanitizer for LLMs**
 
