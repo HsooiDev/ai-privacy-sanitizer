@@ -7,6 +7,13 @@
     "sanitize": "alt+s",
     "restore": "alt+r"
   },
+  "allowlist": [
+    "127.0.0.1",
+    "0.0.0.0",
+    "localhost",
+    "example.com"
+  ],
+  "disabled_rules": [],
   "custom_dictionary": {
     "COMPANY": [
       "Acme Global Technologies Sdn Bhd",

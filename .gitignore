@@ -4,6 +4,7 @@ config.json
 *secret*
 *.key
 *.pem
+*vault*.json
 
 # Python virtual environment & bytecode
 .venv/
@@ -15,16 +16,21 @@ __pycache__/
 *$py.class
 *.so
 
-# Testing & packaging
+# Testing & packaging temporary directories
 .pytest_cache/
 .coverage
 htmlcov/
 dist/
 build/
-*.spec
 *.egg-info/
+
+# Keep standalone release EXE, PyInstaller spec, and app icon in repo so users can download & run directly
 *.exe
-assets/
+!AI-Privacy-Sanitizer.exe
+*.spec
+!AI-Privacy-Sanitizer.spec
+assets/*
+!assets/icon.ico
 
 # OS & IDE files
 .DS_Store

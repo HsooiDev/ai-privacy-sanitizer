@@ -550,10 +550,18 @@ def test_v031_nric_dates_stage2_boundary_and_vault_file(temp_config_dir, monkeyp
     config_path, example_path = temp_config_dir
     sanitizer = PrivacySanitizer(config_path=config_path, example_config_path=example_path)
 
-    # 1. LICENSE file exists
-    license_path = Path(__file__).resolve().parent.parent / "LICENSE"
+    # 1. LICENSE, spec, and icon files exist
+    root_dir = Path(__file__).resolve().parent.parent
+    license_path = root_dir / "LICENSE"
     assert license_path.exists()
     assert "MIT License" in license_path.read_text(encoding="utf-8")
+    assert (root_dir / "AI-Privacy-Sanitizer.spec").exists()
+    assert (root_dir / "assets" / "icon.ico").exists()
+
+    # Verify GitLab token & sentinel spoofing immunity
+    spoof_res = sanitizer.sanitize("GITLAB=glpat-1234567890abcdef123456 \x00\x01__SAN_PH_1__\x01\x00")
+    assert "glpat-" not in spoof_res.sanitized_text
+    assert "<API_KEY_1>" in spoof_res.sanitized_text
 
     # 2. Strict calendar days per month in my_nric_valid & 12-digit timestamp immunity
     assert my_nric_valid("900231-14-5521") is False  # Feb 31 is invalid

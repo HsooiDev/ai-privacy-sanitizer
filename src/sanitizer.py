@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import os
 import re
+import secrets
 import shutil
 import sys
 import threading
@@ -218,7 +219,7 @@ class SessionVault:
         return items
 
     def save_to_file(self, path: Path) -> None:
-        """Export current session mappings to a JSON file (used only when --vault-file is passed in CLI)."""
+        """Export current session mappings atomically to a JSON file with restricted permissions."""
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -229,10 +230,17 @@ class SessionVault:
                 "category_counters": dict(self._category_counters),
                 "total_intercepted_hits": self._total_intercepted_hits,
             }
-        target.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        serialized = json.dumps(payload, indent=2, ensure_ascii=False)
+        tmp_path = target.with_suffix(".vault.tmp")
+        try:
+            tmp_path.write_text(serialized, encoding="utf-8")
+            os.replace(tmp_path, target)
+        except Exception:
+            target.write_text(serialized, encoding="utf-8")
+        try:
+            os.chmod(target, 0o600)
+        except Exception:
+            pass
 
     def load_from_file(self, path: Path) -> None:
         """Load session mappings from a JSON file (used only when --vault-file is passed in CLI)."""
@@ -297,16 +305,26 @@ class PrivacySanitizer:
         self.reload_config(force=True)
 
     def ensure_config_exists(self) -> Path:
-        """Ensure `config.json` exists locally; copy from `config.example.json` or built-in template."""
+        """Ensure `config.json` exists locally; fall back to user AppData if runtime dir is read-only."""
         if not self.config_path.exists():
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            if self.example_config_path.exists():
-                shutil.copyfile(self.example_config_path, self.config_path)
-            else:
-                self.config_path.write_text(
-                    json.dumps(DEFAULT_CONFIG_TEMPLATE, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
+            try:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                if self.example_config_path.exists():
+                    shutil.copyfile(self.example_config_path, self.config_path)
+                else:
+                    self.config_path.write_text(
+                        json.dumps(DEFAULT_CONFIG_TEMPLATE, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+            except OSError:
+                fallback_root = Path(os.environ.get("APPDATA") or Path.home()) / "AI-Privacy-Sanitizer"
+                fallback_root.mkdir(parents=True, exist_ok=True)
+                self.config_path = fallback_root / "config.json"
+                if not self.config_path.exists():
+                    self.config_path.write_text(
+                        json.dumps(DEFAULT_CONFIG_TEMPLATE, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
         return self.config_path
 
     def reload_config(self, force: bool = False) -> Dict[str, Any]:
@@ -600,13 +618,14 @@ class PrivacySanitizer:
         sentinel_to_placeholder: Dict[str, str] = {}
         placeholder_to_sentinel: Dict[str, str] = {}
         sentinel_seq = 0
+        san_prefix = f"\x00\x01__SAN_{secrets.token_hex(6)}_"
 
         def allocate_sentinel(placeholder: str) -> str:
             nonlocal sentinel_seq
             if placeholder in placeholder_to_sentinel:
                 return placeholder_to_sentinel[placeholder]
             sentinel_seq += 1
-            sentinel = f"\x00\x01__SAN_PH_{sentinel_seq}__\x01\x00"
+            sentinel = f"{san_prefix}{sentinel_seq}__\x01\x00"
             sentinel_to_placeholder[sentinel] = placeholder
             placeholder_to_sentinel[placeholder] = sentinel
             return sentinel
@@ -634,7 +653,7 @@ class PrivacySanitizer:
 
             def _dict_replacer(match: re.Match, cat: str = category) -> str:
                 matched_val = match.group(0)
-                if "\x00\x01__SAN_PH_" in matched_val:
+                if san_prefix in matched_val:
                     return matched_val
                 if matched_val.lower() in allowlist_lower:
                     return matched_val
@@ -656,12 +675,12 @@ class PrivacySanitizer:
 
             def _rule_replacer(match: re.Match, current_rule: SanitizeRule = rule) -> str:
                 full_match = match.group(0)
-                if "\x00\x01__SAN_PH_" in full_match:
+                if san_prefix in full_match:
                     return full_match
 
                 if current_rule.target_group:
                     secret_val = match.group(current_rule.target_group)
-                    if not secret_val or "\x00\x01__SAN_PH_" in secret_val:
+                    if not secret_val or san_prefix in secret_val:
                         return full_match
                     if (
                         secret_val.lower() in allowlist_lower
@@ -726,6 +745,7 @@ class PrivacySanitizer:
         working_text = text
         restored_count = 0
         sentinel_to_original: Dict[str, str] = {}
+        res_prefix = f"\x00\x02__RES_{secrets.token_hex(6)}_"
 
         # Stage 1: Exact Replacement (Longest placeholder first + sentinel protection)
         for idx, (ph, orig, _) in enumerate(placeholders, start=1):
@@ -733,14 +753,14 @@ class PrivacySanitizer:
                 continue
             occurrences = working_text.count(ph)
             if occurrences > 0:
-                sentinel = f"\x00\x02__RES_ORIG_{idx}__\x02\x00"
+                sentinel = f"{res_prefix}{idx}__\x02\x00"
                 sentinel_to_original[sentinel] = orig
                 working_text = working_text.replace(ph, sentinel)
                 restored_count += occurrences
 
         # Stage 2: Fuzzy & Case-Insensitive Replacement for AI-mutated bracketed placeholders only
         for idx, (ph, orig, _) in enumerate(placeholders, start=1):
-            sentinel = f"\x00\x02__RES_ORIG_{idx}__\x02\x00"
+            sentinel = f"{res_prefix}{idx}__\x02\x00"
             core = ph[1:-1] if len(ph) > 2 and ph[0] in "[<{" and ph[-1] in "]}>" else ""
             if not (core and re.match(r"^[A-Za-z0-9_]+_\d+$", core)):
                 continue
@@ -762,7 +782,7 @@ class PrivacySanitizer:
             def _fuzzy_sub(match: re.Match, s_tok: str = sentinel, o_val: str = orig) -> str:
                 nonlocal restored_count
                 matched = match.group(0)
-                if "\x00\x02__RES_ORIG_" in matched:
+                if res_prefix in matched:
                     return matched
                 sentinel_to_original[s_tok] = o_val
                 restored_count += 1

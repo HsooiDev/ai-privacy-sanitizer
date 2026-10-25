@@ -169,7 +169,7 @@ def _compile_rules() -> List[SanitizeRule]:
             name="github_token",
             category="API_KEY",
             pattern=re.compile(
-                r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"
+                r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_\-]{20,}|gldt-[A-Za-z0-9_\-]{20,}|glrt-[A-Za-z0-9_\-]{20,})\b"
             ),
             placeholder_template="<API_KEY_{index}>",
         ),
