@@ -599,3 +599,59 @@ def test_v031_nric_dates_stage2_boundary_and_vault_file(temp_config_dir, monkeyp
     assert main(["--restore-stdin", "--vault-file", str(vault_file)], sanitizer=sanitizer_proc2) == 0
     res_out = capsys.readouterr().out
     assert res_out == raw_cli
+
+
+def test_gui_preserves_sandbox_and_inputs_across_theme_and_language_toggle(temp_config_dir):
+    config_path, example_path = temp_config_dir
+    sanitizer = PrivacySanitizer(config_path=config_path, example_config_path=example_path)
+
+    try:
+        from src.gui import _ModernControlCenter
+        win = _ModernControlCenter(sanitizer=sanitizer)
+        win.root.withdraw()
+    except Exception:
+        return
+
+    try:
+        # User types custom text into Live Sandbox and other inputs
+        custom_raw = "MY_CUSTOM_INPUT: password = SuperSecret9988, token = ghp_1234567890abcdef1234567890"
+        win.sandbox_input.delete("1.0", "end")
+        win.sandbox_input.insert("1.0", custom_raw)
+        win._run_sandbox_sanitize()
+
+        win.entry_new_word.delete(0, "end")
+        win.entry_new_word.insert(0, "DraftCompany")
+        win.entry_allowlist.delete(0, "end")
+        win.entry_allowlist.insert(0, "10.0.0.1")
+        win.vault_search_var.set("DB_PASS")
+
+        expected_output = win.sandbox_output.get("1.0", "end").rstrip("\n")
+        assert "[DB_PASS_1]" in expected_output
+
+        # 1. Toggle Light / Dark Theme -> must NOT reset sandbox_input or sandbox_output
+        win._toggle_theme()
+        assert win.sandbox_input.get("1.0", "end").rstrip("\n") == custom_raw
+        assert win.sandbox_output.get("1.0", "end").rstrip("\n") == expected_output
+        assert win.entry_new_word.get() == "DraftCompany"
+        assert win.entry_allowlist.get() == "10.0.0.1"
+        assert win.vault_search_var.get() == "DB_PASS"
+
+        # 2. Toggle Language (ZH <-> EN) -> rebuilds layout but must restore all inputs
+        win._toggle_language()
+        assert win.sandbox_input.get("1.0", "end").rstrip("\n") == custom_raw
+        assert win.sandbox_output.get("1.0", "end").rstrip("\n") == expected_output
+        assert win.entry_new_word.get() == "DraftCompany"
+        assert win.entry_allowlist.get() == "10.0.0.1"
+        assert win.vault_search_var.get() == "DB_PASS"
+
+        # 3. Clearing sandbox and switching language must keep sandbox empty (not revert to default sample)
+        win._clear_sandbox()
+        win._toggle_language()
+        assert win.sandbox_input.get("1.0", "end").rstrip("\n") == ""
+        assert win.sandbox_output.get("1.0", "end").rstrip("\n") == ""
+    finally:
+        try:
+            win.root.destroy()
+        except Exception:
+            pass
+

@@ -400,14 +400,14 @@
             <option value="PROJECT">PROJECT (项目)</option>
             <option value="CUSTOM_SECRET">CUSTOM_SECRET (机密)</option>
           </select>
-          <input type="text" id="inpCustomWord" style="flex:1;" placeholder="输入公司名 Sdn Bhd / 客户名（逗号分隔可批量添加）..." />
+          <input type="text" id="inpCustomWord" style="flex:1;" onkeydown="if(event.key==='Enter') addCustomWords()" placeholder="输入公司名 Sdn Bhd / 客户名（逗号分隔可批量添加）..." />
           <button class="btn-blue" onclick="addCustomWords()" id="btnAddWord">➕ 添加</button>
         </div>
         <div id="customWordsContainer" style="font-size:12px; color:var(--text-secondary); min-height:26px;"></div>
 
         <div class="sub-section-title" id="lblAllowlistSub">2. 🛡️ 白名单 Allowlist（匹配白名单的值将跳过脱敏）</div>
         <div class="dict-row">
-          <input type="text" id="inpAllowlist" style="flex:1;" placeholder="输入不需脱敏的白名单值（如 127.0.0.1, safe@example.com，逗号分隔）..." />
+          <input type="text" id="inpAllowlist" style="flex:1;" onkeydown="if(event.key==='Enter') addAllowlistWords()" placeholder="输入不需脱敏的白名单值（如 127.0.0.1, safe@example.com，逗号分隔）..." />
           <button class="btn-green" onclick="addAllowlistWords()" id="btnAddAllow">➕ 加入白名单</button>
         </div>
         <div id="allowlistContainer" style="font-size:12px; color:var(--text-secondary); min-height:26px;"></div>
@@ -1102,6 +1102,7 @@
       document.getElementById("lblBrandTitle").textContent = isZh ? "🛡️ AI Privacy Sanitizer · Web 纯内存安全版" : "🛡️ AI Privacy Sanitizer · RAM-Only Web Edition";
       document.getElementById("lblBrandSub").textContent = isZh ? "100% 浏览器内存 (RAM) 运行 · 零网络请求 · 零 localStorage 落盘 · 关页即焚" : "100% Browser RAM Execution · Zero Network · Zero localStorage · Wipes on Close";
       document.getElementById("lblSemanticIp").textContent = isZh ? "🌐 语义伪装模式 (IP / Email / Path)" : "🌐 Semantic Mode (IP / Email / Path)";
+      document.getElementById("btnTheme").textContent = currentTheme === "dark" ? (isZh ? "☀️ 浅色模式" : "☀️ Light Mode") : (isZh ? "🌙 暗色模式" : "🌙 Dark Mode");
       document.getElementById("btnSanitize").textContent = isZh ? "🛡️ 立即脱敏 ➔" : "🛡️ Sanitize Now ➔";
       document.getElementById("btnRestore").textContent = isZh ? "🔄 容错逆向还原" : "🔄 Fuzzy Restore";
       document.getElementById("btnCopyOutput").textContent = isZh ? "📑 复制右侧结果" : "📑 Copy Output";
@@ -1110,13 +1111,24 @@
       document.getElementById("btnClearBox").textContent = isZh ? "🧹 清空文本框" : "🧹 Clear Boxes";
       document.getElementById("btnWipeVault").textContent = isZh ? "🔥 立即销毁内存映射表" : "🔥 Wipe RAM Vault";
       document.getElementById("lblLeftTitle").textContent = isZh ? "📥 原始文本 / AI 回复文本 (Input)" : "📥 Raw Input / AI Reply (Input)";
+      document.getElementById("lblInputHint").textContent = isZh ? "支持实时输入自动脱敏 & AI 变形占位符容错还原" : "Live auto-sanitize & fuzzy restore for AI-mutated placeholders";
+      document.getElementById("txtInput").placeholder = isZh ? "在此粘贴代码、日志、.env、密码-123123、账号=asdasd、C:\\Users\\YourName\\..." : "Paste raw code, logs, .env, passwords, API keys, or AI replies here...";
       document.getElementById("lblRightTitle").textContent = isZh ? "🛡️ 脱敏后安全文本 / 还原结果 (Output)" : "🛡️ Sanitized Output / Restored Text";
+      document.getElementById("txtOutput").placeholder = isZh ? "脱敏后的安全文本将显示在这里，可直接复制发给 ChatGPT / Claude..." : "Sanitized safe text will appear here, ready to paste into ChatGPT / Claude...";
       document.getElementById("lblDictTitle").textContent = isZh ? "📚 临时自定义词条 & 白名单（仅存当前内存，不落盘）" : "📚 Custom Words & Allowlist (RAM-Only)";
       document.getElementById("lblCustomWordSub").textContent = isZh ? "1. 自定义敏感词条（优先最长匹配）" : "1. Custom Sensitive Terms (Longest Match First)";
+      document.getElementById("inpCustomWord").placeholder = isZh ? "输入公司名 Sdn Bhd / 客户名（逗号分隔可批量添加）..." : "Enter company / client / project names (comma-separated)...";
+      document.getElementById("btnAddWord").textContent = isZh ? "➕ 添加" : "➕ Add";
       document.getElementById("lblAllowlistSub").textContent = isZh ? "2. 🛡️ 白名单 Allowlist（匹配白名单的值将跳过脱敏）" : "2. 🛡️ Allowlist (Matched values bypass sanitization)";
+      document.getElementById("inpAllowlist").placeholder = isZh ? "输入不需脱敏的白名单值（如 127.0.0.1, safe@example.com，逗号分隔）..." : "Enter safe values to bypass sanitization (comma-separated)...";
+      document.getElementById("btnAddAllow").textContent = isZh ? "➕ 加入白名单" : "➕ Add Allowlist";
       document.getElementById("lblVaultTitle").textContent = isZh ? "🔐 当前内存映射保险箱 (RAM Session Vault)" : "🔐 Active In-Memory Vault (RAM Only)";
+      document.getElementById("thPlaceholder").textContent = isZh ? "占位符 (Placeholder)" : "Placeholder";
+      document.getElementById("thCategory").textContent = isZh ? "类别 (Category)" : "Category";
+      document.getElementById("thOriginal").textContent = isZh ? "原始敏感值 (仅存内存)" : "Original Secret (RAM Only)";
       document.getElementById("btnToggleVaultMask").textContent = vaultMasked ? (isZh ? "👁️ 显示原始敏感值" : "👁️ Reveal Originals") : (isZh ? "🙈 遮罩原始敏感值" : "🙈 Mask Originals");
       document.getElementById("btnToggleDiffView").textContent = diffPreviewActive ? (isZh ? "🔍 差异高亮预览: 开 (悬停看原值)" : "🔍 Diff Highlight: ON (Hover)") : (isZh ? "🔍 差异高亮预览: 关" : "🔍 Diff Highlight: OFF");
+      renderDiffPreview(document.getElementById("txtOutput").value);
       renderVaultTable();
     }
 

@@ -179,6 +179,19 @@ class _ModernControlCenter:
         self._dict_submode: str = "words"
         self._reveal_vault_originals: bool = False
         self._recording_target: Optional[str] = None
+        self._sandbox_debounce_id: Optional[str] = None
+
+        # Persistent UI state across theme/language switches
+        self._saved_sandbox_input: str = SAMPLE_TEST_PAYLOAD.strip()
+        self._saved_sandbox_output: str = ""
+        self._saved_sandbox_cat_counts: Dict[str, int] = {}
+        self._saved_entry_new_word: str = ""
+        self._saved_add_cat_key: str = "COMPANY"
+        self._saved_filter_cat_key: str = "ALL"
+        self._saved_entry_allowlist: str = ""
+        self._saved_vault_search: str = ""
+        self._saved_hk_sanitize: Optional[str] = None
+        self._saved_hk_restore: Optional[str] = None
 
         self.lang = self.sanitizer.language
         self.theme_mode = self.sanitizer.theme
@@ -234,7 +247,121 @@ class _ModernControlCenter:
                 return k
         return "COMPANY"
 
+    def _snapshot_ui_state(self) -> None:
+        """Preserve all user-typed textboxes, entries, and dropdown selections before rebuilding layout."""
+        if self._sandbox_debounce_id is not None:
+            try:
+                self.root.after_cancel(self._sandbox_debounce_id)
+            except Exception:
+                pass
+            self._sandbox_debounce_id = None
+
+        if self._recording_target is not None:
+            self._recording_target = None
+            try:
+                self.root.unbind("<KeyPress>")
+            except Exception:
+                pass
+
+        if hasattr(self, "sandbox_input"):
+            try:
+                self._saved_sandbox_input = self.sandbox_input.get("1.0", "end-1c")
+            except Exception:
+                pass
+        if hasattr(self, "sandbox_output"):
+            try:
+                self._saved_sandbox_output = self.sandbox_output.get("1.0", "end-1c")
+            except Exception:
+                pass
+        if hasattr(self, "entry_new_word"):
+            try:
+                self._saved_entry_new_word = self.entry_new_word.get()
+            except Exception:
+                pass
+        if hasattr(self, "add_cat_combo"):
+            try:
+                self._saved_add_cat_key = self._label_to_cat(self.add_cat_combo.get())
+            except Exception:
+                pass
+        if hasattr(self, "filter_cat_combo"):
+            try:
+                self._saved_filter_cat_key = self._label_to_cat(self.filter_cat_combo.get())
+            except Exception:
+                pass
+        if hasattr(self, "entry_allowlist"):
+            try:
+                self._saved_entry_allowlist = self.entry_allowlist.get()
+            except Exception:
+                pass
+        if hasattr(self, "vault_search_var"):
+            try:
+                self._saved_vault_search = self.vault_search_var.get()
+            except Exception:
+                pass
+        if hasattr(self, "combo_hk_sanitize"):
+            try:
+                self._saved_hk_sanitize = self.combo_hk_sanitize.get()
+            except Exception:
+                pass
+        if hasattr(self, "combo_hk_restore"):
+            try:
+                self._saved_hk_restore = self.combo_hk_restore.get()
+            except Exception:
+                pass
+
+    def _attach_text_context_menu(self, widget: object, is_textbox: bool = True) -> None:
+        """Attach a right-click Cut / Copy / Paste / Select All popup menu to a CTkTextbox or CTkEntry."""
+        inner = getattr(widget, "_textbox", None) if is_textbox else getattr(widget, "_entry", None)
+        if inner is None:
+            return
+        is_zh = self.lang == "zh"
+        menu = tk.Menu(inner, tearoff=0)
+        menu.add_command(
+            label="✂️ 剪切 (Cut)" if is_zh else "✂️ Cut",
+            command=lambda: inner.event_generate("<<Cut>>"),
+        )
+        menu.add_command(
+            label="📋 复制 (Copy)" if is_zh else "📋 Copy",
+            command=lambda: inner.event_generate("<<Copy>>"),
+        )
+        menu.add_command(
+            label="📥 粘贴 (Paste)" if is_zh else "📥 Paste",
+            command=lambda: inner.event_generate("<<Paste>>"),
+        )
+        menu.add_separator()
+        if is_textbox:
+            menu.add_command(
+                label="🔠 全选 (Select All)" if is_zh else "🔠 Select All",
+                command=lambda: inner.tag_add("sel", "1.0", "end"),
+            )
+        else:
+            menu.add_command(
+                label="🔠 全选 (Select All)" if is_zh else "🔠 Select All",
+                command=lambda: inner.select_range(0, "end"),
+            )
+
+        def _popup(event) -> None:
+            try:
+                inner.focus_set()
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        inner.bind("<Button-3>", _popup)
+
     def _build_layout(self) -> None:
+        if getattr(self, "_sandbox_debounce_id", None) is not None:
+            try:
+                self.root.after_cancel(self._sandbox_debounce_id)
+            except Exception:
+                pass
+            self._sandbox_debounce_id = None
+        if self._recording_target is not None:
+            self._recording_target = None
+            try:
+                self.root.unbind("<KeyPress>")
+            except Exception:
+                pass
         if self._main_container is not None:
             self._main_container.destroy()
 
@@ -285,7 +412,7 @@ class _ModernControlCenter:
             if self.theme_mode == "dark"
             else self._t("btn_theme_dark")
         )
-        ctk.CTkButton(
+        self.btn_theme = ctk.CTkButton(
             controls_box,
             text=theme_btn_text,
             font=self.font_body,
@@ -296,7 +423,8 @@ class _ModernControlCenter:
             hover_color=("#cbd5e1", "#334155"),
             text_color=("#0f172a", "#f8fafc"),
             command=self._toggle_theme,
-        ).pack(side="right", padx=(8, 0))
+        )
+        self.btn_theme.pack(side="right", padx=(8, 0))
 
         ctk.CTkButton(
             controls_box,
@@ -597,7 +725,7 @@ class _ModernControlCenter:
             height=32,
             font=self.font_mono,
         )
-        self.combo_hk_sanitize.set(hk.get("sanitize", "alt+s"))
+        self.combo_hk_sanitize.set(self._saved_hk_sanitize or hk.get("sanitize", "alt+s"))
         self.combo_hk_sanitize.pack(side="left", padx=(4, 6))
 
         self.btn_rec_san = ctk.CTkButton(
@@ -628,7 +756,7 @@ class _ModernControlCenter:
             height=32,
             font=self.font_mono,
         )
-        self.combo_hk_restore.set(hk.get("restore", "alt+r"))
+        self.combo_hk_restore.set(self._saved_hk_restore or hk.get("restore", "alt+r"))
         self.combo_hk_restore.pack(side="left", padx=(4, 6))
 
         self.btn_rec_res = ctk.CTkButton(
@@ -906,6 +1034,9 @@ class _ModernControlCenter:
         self.sandbox_input.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self._sandbox_debounce_id: Optional[str] = None
         self.sandbox_input.bind("<KeyRelease>", self._on_sandbox_input_changed)
+        self.sandbox_input.bind("<<Paste>>", self._on_sandbox_input_changed)
+        self.sandbox_input.bind("<<Cut>>", self._on_sandbox_input_changed)
+        self._attach_text_context_menu(self.sandbox_input, is_textbox=True)
 
         right_card = ctk.CTkFrame(
             panes,
@@ -932,8 +1063,15 @@ class _ModernControlCenter:
             wrap="word",
         )
         self.sandbox_output.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._attach_text_context_menu(self.sandbox_output, is_textbox=True)
         self._configure_sandbox_highlight_tag()
-        self.sandbox_input.insert("1.0", SAMPLE_TEST_PAYLOAD.strip())
+        if self._saved_sandbox_input:
+            self.sandbox_input.insert("1.0", self._saved_sandbox_input)
+        if self._saved_sandbox_output:
+            self.sandbox_output.insert("1.0", self._saved_sandbox_output)
+            self._highlight_placeholders_in_output()
+        if self._saved_sandbox_cat_counts:
+            self._render_sandbox_category_pills(self._saved_sandbox_cat_counts)
 
     def _configure_sandbox_highlight_tag(self) -> None:
         inner_text = getattr(self.sandbox_output, "_textbox", None)
@@ -1029,7 +1167,11 @@ class _ModernControlCenter:
             width=210,
             state="readonly",
         )
-        self.add_cat_combo.set(cat_values[0])
+        self.add_cat_combo.set(
+            self._cat_label(self._saved_add_cat_key)
+            if self._saved_add_cat_key in CATEGORY_KEYS
+            else cat_values[0]
+        )
         self.add_cat_combo.pack(side="left", padx=(6, 10))
 
         self.entry_new_word = ctk.CTkEntry(
@@ -1040,6 +1182,9 @@ class _ModernControlCenter:
         )
         self.entry_new_word.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.entry_new_word.bind("<Return>", lambda _e: self._add_word())
+        if self._saved_entry_new_word:
+            self.entry_new_word.insert(0, self._saved_entry_new_word)
+        self._attach_text_context_menu(self.entry_new_word, is_textbox=False)
 
         ctk.CTkButton(
             add_row,
@@ -1071,7 +1216,11 @@ class _ModernControlCenter:
             state="readonly",
             command=lambda _v: self.refresh_dictionary_list(),
         )
-        self.filter_cat_combo.set(filter_values[0])
+        self.filter_cat_combo.set(
+            self._cat_label(self._saved_filter_cat_key)
+            if self._saved_filter_cat_key in (["ALL"] + CATEGORY_KEYS)
+            else filter_values[0]
+        )
         self.filter_cat_combo.pack(side="left", padx=(6, 10))
 
         ctk.CTkButton(
@@ -1161,6 +1310,9 @@ class _ModernControlCenter:
         )
         self.entry_allowlist.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.entry_allowlist.bind("<Return>", lambda _e: self._add_allowlist_from_gui())
+        if self._saved_entry_allowlist:
+            self.entry_allowlist.insert(0, self._saved_entry_allowlist)
+        self._attach_text_context_menu(self.entry_allowlist, is_textbox=False)
 
         ctk.CTkButton(
             allow_in_row,
@@ -1230,16 +1382,18 @@ class _ModernControlCenter:
         bar_inner = ctk.CTkFrame(top_bar, fg_color="transparent")
         bar_inner.pack(fill="x", padx=12, pady=8)
 
-        self.vault_search_var = tk.StringVar()
+        self.vault_search_var = tk.StringVar(value=self._saved_vault_search)
         self.vault_search_var.trace_add("write", lambda *_a: self.refresh_vault_list())
-        ctk.CTkEntry(
+        self.entry_vault_search = ctk.CTkEntry(
             bar_inner,
             textvariable=self.vault_search_var,
             placeholder_text=self._t("placeholder_search_vault"),
             font=self.font_body,
             width=220,
             height=32,
-        ).pack(side="left", padx=(0, 10))
+        )
+        self.entry_vault_search.pack(side="left", padx=(0, 10))
+        self._attach_text_context_menu(self.entry_vault_search, is_textbox=False)
 
         self.var_reveal_vault = tk.BooleanVar(value=self._reveal_vault_originals)
         ctk.CTkSwitch(
@@ -1342,6 +1496,7 @@ class _ModernControlCenter:
             corner_radius=10,
         )
         editor.pack(fill="both", expand=True, padx=18, pady=6)
+        self._attach_text_context_menu(editor, is_textbox=True)
 
         cfg_path = self.sanitizer.ensure_config_exists()
         try:
@@ -1423,6 +1578,7 @@ class _ModernControlCenter:
         self.refresh_all()
 
     def _toggle_language(self) -> None:
+        self._snapshot_ui_state()
         self.lang = "en" if self.lang == "zh" else "zh"
         self.sanitizer.set_language(self.lang)
         if self.on_language_changed:
@@ -1430,11 +1586,18 @@ class _ModernControlCenter:
         self._build_layout()
 
     def _toggle_theme(self) -> None:
+        self._snapshot_ui_state()
         self.theme_mode = "light" if self.theme_mode == "dark" else "dark"
         self.sanitizer.set_theme(self.theme_mode)
         ctk.set_appearance_mode("Light" if self.theme_mode == "light" else "Dark")
+        if hasattr(self, "btn_theme") and self.btn_theme.winfo_exists():
+            self.btn_theme.configure(
+                text=self._t("btn_theme_light")
+                if self.theme_mode == "dark"
+                else self._t("btn_theme_dark")
+            )
         self._configure_sandbox_highlight_tag()
-        self._build_layout()
+        self._highlight_placeholders_in_output()
 
     def _on_dict_submode_selected(self, label: str) -> None:
         mode = "rules" if label == self._dict_mode_labels[1] else "words"
@@ -1539,6 +1702,7 @@ class _ModernControlCenter:
         for c in candidates:
             self.sanitizer.add_allowlist_item(c)
         self.entry_allowlist.delete(0, "end")
+        self._saved_entry_allowlist = ""
         self.refresh_allowlist_and_rules_list()
 
     def _remove_allowlist_from_gui(self, item: str) -> None:
@@ -1732,6 +1896,7 @@ class _ModernControlCenter:
             if self.sanitizer.add_custom_word(cat_key, w):
                 added += 1
         self.entry_new_word.delete(0, "end")
+        self._saved_entry_new_word = ""
         self.refresh_dictionary_list()
         if added > 0:
             self.status_var.set(f"✅ [{cat_key}] +{added}")
@@ -1960,6 +2125,9 @@ class _ModernControlCenter:
         res = self.sanitizer.sanitize(raw)
         self.sandbox_output.delete("1.0", "end")
         self.sandbox_output.insert("1.0", res.sanitized_text)
+        self._saved_sandbox_input = raw
+        self._saved_sandbox_output = res.sanitized_text
+        self._saved_sandbox_cat_counts = dict(res.category_counts)
         self._highlight_placeholders_in_output()
         self._render_sandbox_category_pills(res.category_counts)
         self.refresh_all()
@@ -1972,6 +2140,7 @@ class _ModernControlCenter:
         res = self.sanitizer.restore(sanitized)
         self.sandbox_output.delete("1.0", "end")
         self.sandbox_output.insert("1.0", res.restored_text)
+        self._saved_sandbox_output = res.restored_text
         self.status_var.set(res.format_summary(self.lang))
 
     def _copy_sandbox_output(self) -> None:
@@ -1982,6 +2151,9 @@ class _ModernControlCenter:
     def _clear_sandbox(self) -> None:
         self.sandbox_input.delete("1.0", "end")
         self.sandbox_output.delete("1.0", "end")
+        self._saved_sandbox_input = ""
+        self._saved_sandbox_output = ""
+        self._saved_sandbox_cat_counts = {}
         self._render_sandbox_category_pills({})
 
     def _copy_text(self, text: str) -> None:
