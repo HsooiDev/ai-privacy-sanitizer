@@ -1,5 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.win32.versioninfo import (
+    VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct,
+)
+from src import APP_NAME, __version__
+
+version_tuple = tuple(int(part) for part in __version__.split('.'))
+version_tuple = version_tuple + (0,) * (4 - len(version_tuple))
+windows_version = VSVersionInfo(
+    ffi=FixedFileInfo(filevers=version_tuple, prodvers=version_tuple, mask=0x3f,
+                      flags=0, OS=0x40004, fileType=1, subtype=0, date=(0, 0)),
+    kids=[StringFileInfo([StringTable('040904B0', [
+        StringStruct('FileDescription', APP_NAME),
+        StringStruct('ProductName', APP_NAME),
+        StringStruct('InternalName', APP_NAME),
+        StringStruct('OriginalFilename', APP_NAME + '.exe'),
+        StringStruct('FileVersion', __version__),
+        StringStruct('ProductVersion', __version__),
+    ])]), VarFileInfo([VarStruct('Translation', [1033, 1200])])],
+)
 
 datas = []
 binaries = []
@@ -31,7 +50,8 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='AI-Privacy-Sanitizer',
+    name=APP_NAME,
+    version=windows_version,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

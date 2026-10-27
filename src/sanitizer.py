@@ -1,19 +1,51 @@
 """Core two-layer privacy sanitization engine and in-memory bidirectional session vault."""
 
+import copy
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import os
 import re
 import secrets
-import shutil
 import sys
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.rules import BUILTIN_RULES, SanitizeRule
+from src.secure_io import atomic_write_private, validate_private_path
 
 MAX_SANITIZE_CHARS = 1_500_000
+
+
+class InputTooLargeError(ValueError):
+    """Input was rejected without producing a sanitized result."""
+
+    def __init__(self) -> None:
+        super().__init__(f"Input exceeds the {MAX_SANITIZE_CHARS:,}-character limit; no output produced")
+
+
+class HotkeyRollbackError(RuntimeError):
+    """Settings were preserved, but restoration of the active hotkeys failed."""
+
+
+def _placeholder_pattern(placeholder: str) -> str:
+    """Use identical token boundaries when protecting and restoring known placeholders."""
+    escaped = re.escape(placeholder)
+    if placeholder[0] in "[<{":
+        return escaped
+    if re.fullmatch(r"[0-9.]+", placeholder):
+        return r"(?<![\w.])" + escaped + r"(?!\w|\.\w)"
+    if "@" in placeholder:
+        return r"(?<![\w.!#$%&'*+/=?^`{|}~@-])" + escaped + r"(?![\w@-]|\.\w)"
+    return r"(?<![\w.-])" + escaped + r"(?![\w.-])"
+
+
+def _restore_identity(placeholder: str) -> str:
+    core = placeholder[1:-1]
+    if placeholder[0] in "[<{" and re.fullmatch(r"[A-Za-z0-9_]+_[0-9]+", core):
+        return "bracket:" + core.lower()
+    return "exact:" + placeholder
 
 
 def get_runtime_dir() -> Path:
@@ -24,8 +56,23 @@ def get_runtime_dir() -> Path:
 
 
 PROJECT_ROOT = get_runtime_dir()
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
-EXAMPLE_CONFIG_PATH = PROJECT_ROOT / "config.example.json"
+def get_default_config_path() -> Path:
+    """Keep packaged-app settings outside executable folders and sync staging."""
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / "Sanitizer" / "config.json"
+    if getattr(sys, "frozen", False) and sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "AI-Privacy-Sanitizer" / "config.json"
+    return PROJECT_ROOT / "config.json"
+
+
+DEFAULT_CONFIG_PATH = get_default_config_path()
+EXAMPLE_CONFIG_PATH = (
+    Path(sys._MEIPASS) / "config.example.json"
+    if getattr(sys, "frozen", False) and sys.platform == "darwin" and hasattr(sys, "_MEIPASS")
+    else PROJECT_ROOT / "config.example.json"
+)
 
 DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
     "language": "zh",
@@ -153,15 +200,18 @@ class SessionVault:
                 semantic_ip_mode=semantic_ip_mode,
             )
 
-            while placeholder in self._placeholder_to_original:
+            while placeholder in self._placeholder_to_original or placeholder == original:
                 idx += 1
                 self._category_counters[category] = idx
-                placeholder = self._build_placeholder(
+                next_placeholder = self._build_placeholder(
                     category=category,
                     index=idx,
                     template=template,
                     semantic_ip_mode=semantic_ip_mode,
                 )
+                if next_placeholder == placeholder:
+                    raise ValueError("Placeholder template cannot allocate distinct values")
+                placeholder = next_placeholder
 
             self._original_to_placeholder[original] = placeholder
             self._placeholder_to_original[placeholder] = original
@@ -176,10 +226,10 @@ class SessionVault:
         semantic_ip_mode: bool,
     ) -> str:
         if semantic_ip_mode:
-            if category == "PRIVATE_IP":
+            if category == "PRIVATE_IP" and index <= 150:
                 octet = 100 + ((index - 1) % 150) + 1
                 return f"192.0.2.{octet}"
-            if category == "PUBLIC_IP":
+            if category == "PUBLIC_IP" and index <= 150:
                 octet = 100 + ((index - 1) % 150) + 1
                 return f"203.0.113.{octet}"
             if category == "EMAIL":
@@ -221,7 +271,6 @@ class SessionVault:
     def save_to_file(self, path: Path) -> None:
         """Export current session mappings atomically to a JSON file with restricted permissions."""
         target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             payload = {
                 "original_to_placeholder": dict(self._original_to_placeholder),
@@ -231,56 +280,103 @@ class SessionVault:
                 "total_intercepted_hits": self._total_intercepted_hits,
             }
         serialized = json.dumps(payload, indent=2, ensure_ascii=False)
-        tmp_path = target.with_suffix(".vault.tmp")
-        try:
-            tmp_path.write_text(serialized, encoding="utf-8")
-            os.replace(tmp_path, target)
-        except Exception:
-            target.write_text(serialized, encoding="utf-8")
-        try:
-            os.chmod(target, 0o600)
-        except Exception:
-            pass
+        atomic_write_private(target, serialized)
+
+    @staticmethod
+    def _loaded_placeholder_index(placeholder: str, category: str) -> int:
+        """Accept only placeholders produced by the built-in engine or custom categories."""
+        templates = {"[{category}_{index}]"}
+        templates.update(rule.placeholder_template for rule in BUILTIN_RULES if rule.category == category)
+        marker = "\x00APS_INDEX\x00"
+        while marker in category:
+            marker += "\x00"
+        for template in templates:
+            pattern = re.escape(template.format(category=category, index=marker))
+            match = re.fullmatch(pattern.replace(re.escape(marker), r"([1-9][0-9]*)"), placeholder)
+            if match:
+                return int(match.group(1))
+        semantic = {
+            "PRIVATE_IP": r"192\.0\.2\.(1[0-9]{2}|2[0-4][0-9]|250)",
+            "PUBLIC_IP": r"203\.0\.113\.(1[0-9]{2}|2[0-4][0-9]|250)",
+            "EMAIL": r"user([1-9][0-9]*)@example\.com",
+            "USER_PATH": r"dev_user_([1-9][0-9]*)",
+        }
+        if category in semantic:
+            match = re.fullmatch(semantic[category], placeholder)
+            if match:
+                value = int(match.group(1))
+                if category not in ("PRIVATE_IP", "PUBLIC_IP"):
+                    return value
+                if 101 <= value <= 250:
+                    return value - 100
+        raise ValueError("Invalid vault mapping")
+
+    @staticmethod
+    def _loaded_counter(value: Any) -> int:
+        # Preserve old JSON files that represented nonnegative counters as decimal strings.
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            value = int(value)
+        if type(value) is not int or value < 0:
+            raise ValueError("Invalid vault counter")
+        return value
 
     def load_from_file(self, path: Path) -> None:
-        """Load session mappings from a JSON file (used only when --vault-file is passed in CLI)."""
-        source = Path(path)
+        """Validate the entire imported state before merging it into the live vault."""
+        source = validate_private_path(path)
         if not source.exists():
             return
         raw = json.loads(source.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            return
+            raise ValueError("Invalid vault format")
+        fields = ("original_to_placeholder", "placeholder_to_original", "original_to_category", "category_counters")
+        maps = [raw.get(field, {}) for field in fields]
+        if any(not isinstance(mapping, dict) for mapping in maps):
+            raise ValueError("Invalid vault format")
+        orig_to_ph, ph_to_orig, orig_to_cat, raw_counters = maps
+        if any(
+            not isinstance(key, str) or not key or not isinstance(value, str) or not value
+            for mapping in maps[:3] for key, value in mapping.items()
+        ):
+            raise ValueError("Invalid vault mapping")
+        if set(orig_to_cat) != set(orig_to_ph) or len(orig_to_ph) != len(ph_to_orig):
+            raise ValueError("Invalid vault mapping")
+        counters = {}
+        for category, value in raw_counters.items():
+            if not isinstance(category, str) or not category:
+                raise ValueError("Invalid vault counter")
+            counters[category] = self._loaded_counter(value)
+        for original, placeholder in orig_to_ph.items():
+            if original == placeholder or ph_to_orig.get(placeholder) != original:
+                raise ValueError("Invalid vault mapping")
+            category = orig_to_cat[original]
+            index = self._loaded_placeholder_index(placeholder, category)
+            counters[category] = max(counters.get(category, 0), index)
+        hits = self._loaded_counter(raw.get("total_intercepted_hits", 0))
         with self._lock:
-            orig_to_ph = raw.get("original_to_placeholder", {})
-            ph_to_orig = raw.get("placeholder_to_original", {})
-            orig_to_cat = raw.get("original_to_category", {})
-            counters = raw.get("category_counters", {})
-            if isinstance(orig_to_ph, dict):
-                self._original_to_placeholder.update(
-                    {str(k): str(v) for k, v in orig_to_ph.items()}
-                )
-            if isinstance(ph_to_orig, dict):
-                self._placeholder_to_original.update(
-                    {str(k): str(v) for k, v in ph_to_orig.items()}
-                )
-            if isinstance(orig_to_cat, dict):
-                self._original_to_category.update(
-                    {str(k): str(v) for k, v in orig_to_cat.items()}
-                )
-            if isinstance(counters, dict):
-                for k, v in counters.items():
-                    try:
-                        self._category_counters[str(k)] = max(
-                            self._category_counters.get(str(k), 0), int(v)
-                        )
-                    except Exception:
-                        pass
-            try:
-                self._total_intercepted_hits += max(
-                    0, int(raw.get("total_intercepted_hits", 0))
-                )
-            except Exception:
-                pass
+            identities = {
+                _restore_identity(placeholder): original
+                for placeholder, original in self._placeholder_to_original.items()
+            }
+            for original, placeholder in orig_to_ph.items():
+                identity = _restore_identity(placeholder)
+                if identity in identities and identities[identity] != original:
+                    raise ValueError("Ambiguous vault restoration aliases")
+                identities[identity] = original
+                if (
+                    original in self._original_to_placeholder
+                    and self._original_to_placeholder[original] != placeholder
+                    or placeholder in self._placeholder_to_original
+                    and self._placeholder_to_original[placeholder] != original
+                    or original in self._original_to_category
+                    and self._original_to_category[original] != orig_to_cat[original]
+                ):
+                    raise ValueError("Vault conflicts with current session")
+            self._original_to_placeholder.update(orig_to_ph)
+            self._placeholder_to_original.update(ph_to_orig)
+            self._original_to_category.update(orig_to_cat)
+            for category, value in counters.items():
+                self._category_counters[category] = max(self._category_counters.get(category, 0), value)
+            self._total_intercepted_hits += hits
 
 
 class PrivacySanitizer:
@@ -292,6 +388,7 @@ class PrivacySanitizer:
         example_config_path: Optional[Path] = None,
         rules: Optional[List[SanitizeRule]] = None,
     ) -> None:
+        self._explicit_config_path = config_path is not None
         self.config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
         self.example_config_path = (
             Path(example_config_path) if example_config_path else EXAMPLE_CONFIG_PATH
@@ -301,29 +398,49 @@ class PrivacySanitizer:
         self._config_lock = threading.RLock()
         self._config_mtime: float = -1.0
         self._config_data: Dict[str, Any] = {}
+        self._persisted_config: Dict[str, Any] = {}
         self.ensure_config_exists()
         self.reload_config(force=True)
 
     def ensure_config_exists(self) -> Path:
         """Ensure `config.json` exists locally; fall back to user AppData if runtime dir is read-only."""
+        validate_private_path(self.config_path)
         if not self.config_path.exists():
+            if not self._explicit_config_path and getattr(sys, "frozen", False) and sys.platform == "win32":
+                legacy = PROJECT_ROOT / "config.json"
+                if legacy != self.config_path and legacy.exists():
+                    # Never relax the link checks for a sync client's staging
+                    # links. Migrate once into a local, private, independent file;
+                    # retain the original and all its settings unchanged.
+                    validate_private_path(legacy)
+                    raw = legacy.read_text(encoding="utf-8")
+                    if not isinstance(json.loads(raw), dict):
+                        raise ValueError("Legacy configuration must be a JSON object")
+                    try:
+                        atomic_write_private(self.config_path, raw, overwrite=False)
+                    except FileExistsError:
+                        # Another instance may have completed migration first.
+                        validate_private_path(self.config_path)
+                    return self.config_path
             try:
-                self.config_path.parent.mkdir(parents=True, exist_ok=True)
-                if self.example_config_path.exists():
-                    shutil.copyfile(self.example_config_path, self.config_path)
-                else:
-                    self.config_path.write_text(
-                        json.dumps(DEFAULT_CONFIG_TEMPLATE, indent=2, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-            except OSError:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                template = (
+                    self.example_config_path.read_text(encoding="utf-8")
+                    if self.example_config_path.exists()
+                    else json.dumps(DEFAULT_CONFIG_TEMPLATE, indent=2, ensure_ascii=False)
+                )
+                atomic_write_private(self.config_path, template, overwrite=False)
+            except PermissionError:
+                if self._explicit_config_path or (getattr(sys, "frozen", False) and sys.platform == "win32"):
+                    raise
                 fallback_root = Path(os.environ.get("APPDATA") or Path.home()) / "AI-Privacy-Sanitizer"
                 fallback_root.mkdir(parents=True, exist_ok=True)
                 self.config_path = fallback_root / "config.json"
                 if not self.config_path.exists():
-                    self.config_path.write_text(
+                    atomic_write_private(
+                        self.config_path,
                         json.dumps(DEFAULT_CONFIG_TEMPLATE, indent=2, ensure_ascii=False),
-                        encoding="utf-8",
+                        overwrite=False,
                     )
         return self.config_path
 
@@ -338,25 +455,26 @@ class PrivacySanitizer:
                     loaded = json.loads(raw)
                     if isinstance(loaded, dict):
                         self._config_data = loaded
+                        self._persisted_config = copy.deepcopy(loaded)
                         self._config_mtime = mtime
             except Exception:
                 if not self._config_data:
-                    self._config_data = json.loads(json.dumps(DEFAULT_CONFIG_TEMPLATE))
+                    self._config_data = copy.deepcopy(DEFAULT_CONFIG_TEMPLATE)
+                    self._persisted_config = copy.deepcopy(self._config_data)
             return self._config_data
 
     def save_config(self, new_config: Optional[Dict[str, Any]] = None) -> None:
         """Persist current or provided configuration dictionary to `config.json` atomically."""
         with self._config_lock:
-            if new_config is not None:
-                self._config_data = new_config
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            serialized = json.dumps(self._config_data, indent=2, ensure_ascii=False)
-            tmp_path = self.config_path.with_suffix(".json.tmp")
+            candidate = self._config_data if new_config is None else new_config
             try:
-                tmp_path.write_text(serialized, encoding="utf-8")
-                os.replace(tmp_path, self.config_path)
-            except Exception:
-                self.config_path.write_text(serialized, encoding="utf-8")
+                serialized = json.dumps(candidate, indent=2, ensure_ascii=False)
+                atomic_write_private(self.config_path, serialized)
+            except (OSError, TypeError, ValueError):
+                self._config_data = copy.deepcopy(self._persisted_config)
+                raise
+            self._config_data = candidate
+            self._persisted_config = copy.deepcopy(candidate)
             try:
                 self._config_mtime = self.config_path.stat().st_mtime
             except Exception:
@@ -423,8 +541,9 @@ class PrivacySanitizer:
             "restore": res,
         }
 
-    def set_hotkeys(self, sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:
-        """Validate, normalize, and persist global hotkeys for sanitize and restore."""
+    @staticmethod
+    def normalize_hotkeys(sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:
+        """Validate a candidate without changing settings or writing to disk."""
         san_clean = re.sub(r"\s+", "", str(sanitize_hotkey or "").strip().lower())
         res_clean = re.sub(r"\s+", "", str(restore_hotkey or "").strip().lower())
         if not san_clean or not res_clean:
@@ -435,13 +554,14 @@ class PrivacySanitizer:
             r"^[a-z0-9_+/\-]+$", res_clean
         ):
             raise ValueError("Invalid hotkey format")
+        return {"sanitize": san_clean, "restore": res_clean}
 
+    def set_hotkeys(self, sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:
+        """Validate, normalize, and persist global hotkeys for sanitize and restore."""
+        candidate = self.normalize_hotkeys(sanitize_hotkey, restore_hotkey)
         with self._config_lock:
             self.reload_config()
-            self._config_data["hotkeys"] = {
-                "sanitize": san_clean,
-                "restore": res_clean,
-            }
+            self._config_data["hotkeys"] = candidate
             self.save_config()
             return self.hotkeys
 
@@ -579,9 +699,8 @@ class PrivacySanitizer:
     def export_config(self, target_path: Path) -> None:
         """Export current `config.json` to `target_path`."""
         self.reload_config()
-        Path(target_path).write_text(
-            json.dumps(self._config_data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+        atomic_write_private(
+            target_path, json.dumps(self._config_data, indent=2, ensure_ascii=False)
         )
 
     def import_config(self, source_path: Path) -> Dict[str, Any]:
@@ -606,7 +725,9 @@ class PrivacySanitizer:
 
     def sanitize(self, text: str) -> SanitizeResult:
         """Sanitize text using Layer 1 (Custom Dictionary) followed by Layer 2 (Regex Rules)."""
-        if not text or len(text) > MAX_SANITIZE_CHARS:
+        if len(text) > MAX_SANITIZE_CHARS:
+            raise InputTooLargeError()
+        if not text:
             return SanitizeResult(sanitized_text=text, total_count=0, category_counts={})
 
         semantic_ip = self.semantic_ip_mode
@@ -619,6 +740,31 @@ class PrivacySanitizer:
         placeholder_to_sentinel: Dict[str, str] = {}
         sentinel_seq = 0
         san_prefix = f"\x00\x01__SAN_{secrets.token_hex(6)}_"
+        while san_prefix in text:
+            san_prefix += "\x00"
+        sentinel_pattern = re.compile(re.escape(san_prefix) + r"\d+__\x01\x00")
+
+        def unprotect(value: str) -> str:
+            return sentinel_pattern.sub(
+                lambda match: sentinel_to_placeholder.get(match.group(0), match.group(0)), value
+            )
+
+        def protected_sub(pattern: re.Pattern, replacer) -> str:
+            # Do not let short dictionary terms or rules rewrite fragments inside a marker.
+            spans = [match.span() for match in sentinel_pattern.finditer(working_text)]
+            starts = [start for start, _ in spans]
+            ends = [end for _, end in spans]
+
+            def guarded(match: re.Match) -> str:
+                first = bisect_right(ends, match.start())
+                last = bisect_left(starts, match.end()) - 1
+                if first <= last and (
+                    match.start() > starts[first] or match.end() < ends[last]
+                ):
+                    return match.group(0)
+                return replacer(match)
+
+            return pattern.sub(guarded, working_text)
 
         def allocate_sentinel(placeholder: str) -> str:
             nonlocal sentinel_seq
@@ -640,8 +786,10 @@ class PrivacySanitizer:
         # Protect any already-existing placeholders in the input text (idempotency)
         for existing_ph, _, _ in self.vault.snapshot_placeholders():
             if existing_ph in working_text:
-                sentinel = allocate_sentinel(existing_ph)
-                working_text = working_text.replace(existing_ph, sentinel)
+                working_text = re.sub(
+                    _placeholder_pattern(existing_ph),
+                    lambda _match, ph=existing_ph: allocate_sentinel(ph), working_text,
+                )
 
         # --- Layer 1: Custom High-Risk Dictionary (Sorted Longest to Shortest, Case-Insensitive) ---
         for term, category in self._get_sorted_custom_terms():
@@ -653,8 +801,9 @@ class PrivacySanitizer:
 
             def _dict_replacer(match: re.Match, cat: str = category) -> str:
                 matched_val = match.group(0)
-                if san_prefix in matched_val:
+                if matched_val in sentinel_to_placeholder:
                     return matched_val
+                matched_val = unprotect(matched_val)
                 if matched_val.lower() in allowlist_lower:
                     return matched_val
                 ph = self.vault.get_or_create_placeholder(
@@ -666,7 +815,7 @@ class PrivacySanitizer:
                 record_hit(cat)
                 return allocate_sentinel(ph)
 
-            working_text = pattern.sub(_dict_replacer, working_text)
+            working_text = protected_sub(pattern, _dict_replacer)
 
         # --- Layer 2: Built-in High-Strength Regex Engine ---
         for rule in self.rules:
@@ -675,13 +824,14 @@ class PrivacySanitizer:
 
             def _rule_replacer(match: re.Match, current_rule: SanitizeRule = rule) -> str:
                 full_match = match.group(0)
-                if san_prefix in full_match:
+                if full_match in sentinel_to_placeholder:
                     return full_match
 
                 if current_rule.target_group:
                     secret_val = match.group(current_rule.target_group)
-                    if not secret_val or san_prefix in secret_val:
+                    if not secret_val or secret_val in sentinel_to_placeholder:
                         return full_match
+                    secret_val = unprotect(secret_val)
                     if (
                         secret_val.lower() in allowlist_lower
                         or full_match.lower() in allowlist_lower
@@ -703,15 +853,16 @@ class PrivacySanitizer:
                     rel_end = match.end(current_rule.target_group) - match.start(0)
                     return full_match[:rel_start] + sentinel + full_match[rel_end:]
 
-                if full_match.lower() in allowlist_lower:
+                original_match = unprotect(full_match)
+                if original_match.lower() in allowlist_lower:
                     return full_match
                 if current_rule.validator is not None and not current_rule.validator(
-                    full_match
+                    original_match
                 ):
                     return full_match
 
                 ph = self.vault.get_or_create_placeholder(
-                    original=full_match,
+                    original=original_match,
                     category=current_rule.category,
                     template=current_rule.placeholder_template,
                     semantic_ip_mode=semantic_ip,
@@ -719,7 +870,7 @@ class PrivacySanitizer:
                 record_hit(current_rule.category)
                 return allocate_sentinel(ph)
 
-            working_text = rule.pattern.sub(_rule_replacer, working_text)
+            working_text = protected_sub(rule.pattern, _rule_replacer)
 
         for sentinel, ph in sentinel_to_placeholder.items():
             working_text = working_text.replace(sentinel, ph)
@@ -751,11 +902,12 @@ class PrivacySanitizer:
         for idx, (ph, orig, _) in enumerate(placeholders, start=1):
             if ph not in working_text:
                 continue
-            occurrences = working_text.count(ph)
-            if occurrences > 0:
-                sentinel = f"{res_prefix}{idx}__\x02\x00"
+            sentinel = f"{res_prefix}{idx}__\x02\x00"
+            working_text, occurrences = re.subn(
+                _placeholder_pattern(ph), lambda _match: sentinel, working_text
+            )
+            if occurrences:
                 sentinel_to_original[sentinel] = orig
-                working_text = working_text.replace(ph, sentinel)
                 restored_count += occurrences
 
         # Stage 2: Fuzzy & Case-Insensitive Replacement for AI-mutated bracketed placeholders only

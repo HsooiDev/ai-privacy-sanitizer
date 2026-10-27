@@ -359,7 +359,7 @@
       <div class="toolbar-group">
         <button onclick="loadSamplePayload()" id="btnLoadSample">📋 载入全场景测试样本</button>
         <button onclick="clearSandbox()" id="btnClearBox">🧹 清空文本框</button>
-        <button class="btn-red" onclick="wipeAllMemory()" id="btnWipeVault">🔥 立即销毁内存映射表</button>
+        <button class="btn-red" onclick="wipeAllMemory()" id="btnWipeVault">🔥 清空当前会话</button>
       </div>
     </div>
 
@@ -452,11 +452,11 @@
     var currentTheme = "dark";
     var vaultMasked = true;
     var diffPreviewActive = false;
-    var originalToPlaceholder = {};
-    var placeholderToOriginal = {};
-    var originalToCategory = {};
-    var categoryCounters = {};
-    var lastCategoryCounts = {};
+    var originalToPlaceholder = Object.create(null);
+    var placeholderToOriginal = Object.create(null);
+    var originalToCategory = Object.create(null);
+    var categoryCounters = Object.create(null);
+    var lastCategoryCounts = Object.create(null);
     var customDict = {
       COMPANY: ["Acme Global Technologies Sdn Bhd", "Acme Global"],
       CLIENT: ["MegaCorp Bank Berhad", "MegaCorp"],
@@ -465,6 +465,7 @@
     };
     var allowlistItems = ["127.0.0.1", "0.0.0.0", "localhost", "example.com"];
     var idleSecondsLeft = 600;
+    var sessionGeneration = 0;
 
     var VALID_MY_PB_CODES = {
       1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1,
@@ -598,11 +599,11 @@
     document.addEventListener("keydown", resetIdleTimer);
 
     window.addEventListener("beforeunload", function () {
-      originalToPlaceholder = {};
-      placeholderToOriginal = {};
-      originalToCategory = {};
-      categoryCounters = {};
-      lastCategoryCounts = {};
+      originalToPlaceholder = Object.create(null);
+      placeholderToOriginal = Object.create(null);
+      originalToCategory = Object.create(null);
+      categoryCounters = Object.create(null);
+      lastCategoryCounts = Object.create(null);
     });
 
     function getOrCreatePlaceholder(original, category, template) {
@@ -610,20 +611,26 @@
         return originalToPlaceholder[original];
       }
       var idx = (categoryCounters[category] || 0) + 1;
-      categoryCounters[category] = idx;
       var semanticIp = document.getElementById("chkSemanticIp").checked;
-      var ph = "";
-      if (semanticIp && category === "PRIVATE_IP") {
-        ph = "192.0.2." + (101 + ((idx - 1) % 150));
-      } else if (semanticIp && category === "PUBLIC_IP") {
-        ph = "203.0.113." + (101 + ((idx - 1) % 150));
-      } else if (semanticIp && category === "EMAIL") {
-        ph = "user" + idx + "@example.com";
-      } else if (semanticIp && category === "USER_PATH") {
-        ph = "dev_user_" + idx;
-      } else {
-        ph = template.replace("{category}", category).replace("{index}", idx);
+      var ph = "", previous = null;
+      while (true) {
+        if (semanticIp && category === "PRIVATE_IP" && idx <= 150) {
+          ph = "192.0.2." + (101 + ((idx - 1) % 150));
+        } else if (semanticIp && category === "PUBLIC_IP" && idx <= 150) {
+          ph = "203.0.113." + (101 + ((idx - 1) % 150));
+        } else if (semanticIp && category === "EMAIL") {
+          ph = "user" + idx + "@example.com";
+        } else if (semanticIp && category === "USER_PATH") {
+          ph = "dev_user_" + idx;
+        } else {
+          ph = template.replace("{category}", category).replace("{index}", idx);
+        }
+        if (ph !== original && !Object.prototype.hasOwnProperty.call(placeholderToOriginal, ph)) break;
+        if (ph === previous) throw new Error("Placeholder template cannot allocate distinct values");
+        previous = ph;
+        idx += 1;
       }
+      categoryCounters[category] = idx;
       originalToPlaceholder[original] = ph;
       placeholderToOriginal[ph] = original;
       originalToCategory[original] = category;
@@ -634,8 +641,35 @@
       return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 
+    function replaceKnownPlaceholder(text, placeholder, onMatch) {
+      var escaped = escapeRegExp(placeholder);
+      if (/^[\[<{]/.test(placeholder)) return text.replace(new RegExp(escaped, "gu"), onMatch);
+      var before = "[^\\p{L}\\p{N}_.-]", after = "(?![\\p{L}\\p{N}_.-])";
+      if (/^[0-9.]+$/.test(placeholder)) {
+        before = "[^\\p{L}\\p{N}_.]";
+        after = "(?![\\p{L}\\p{N}_]|\\.[\\p{L}\\p{N}_])";
+      } else if (placeholder.indexOf("@") !== -1) {
+        before = "[^\\p{L}\\p{N}_.!#$%&'*+/=?^`{|}~@-]";
+        after = "(?![\\p{L}\\p{N}_@-]|\\.[\\p{L}\\p{N}_])";
+      }
+      var regex = new RegExp("(^|" + before + ")" + escaped + after, "gu");
+      return text.replace(regex, function (_match, prefix) { return prefix + onMatch(); });
+    }
+
+    function makeSentinelPrefix(text, stage) {
+      var nonce = Math.random().toString(36).slice(2);
+      if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+        var random = new Uint32Array(4);
+        crypto.getRandomValues(random);
+        nonce = Array.prototype.join.call(random, "_");
+      }
+      var prefix = "\x00" + stage + "_" + nonce + "_";
+      while (text.indexOf(prefix) !== -1) prefix += "\x00";
+      return prefix;
+    }
+
     function sanitizeText(rawText) {
-      lastCategoryCounts = {};
+      lastCategoryCounts = Object.create(null);
       if (!rawText) {
         return { text: "", count: 0 };
       }
@@ -644,6 +678,37 @@
       var phToSentinel = {};
       var seq = 0;
       var totalHits = 0;
+      var sentinelPrefix = makeSentinelPrefix(rawText, "\x01__WEB_PH");
+      var sentinelRx = new RegExp(escapeRegExp(sentinelPrefix) + "[0-9]+__\x01\x00", "g");
+
+      function unprotect(value) {
+        return value.replace(sentinelRx, function (token) {
+          return Object.prototype.hasOwnProperty.call(sentinelToPh, token) ? sentinelToPh[token] : token;
+        });
+      }
+
+      function protectedReplace(regex, replacer) {
+        var spans = [], token;
+        sentinelRx.lastIndex = 0;
+        while ((token = sentinelRx.exec(working)) !== null) spans.push([token.index, sentinelRx.lastIndex]);
+        working = working.replace(regex, function () {
+          var args = arguments, start = args[args.length - 2], end = start + args[0].length;
+          var lo = 0, hi = spans.length;
+          while (lo < hi) {
+            var mid = (lo + hi) >>> 1;
+            if (spans[mid][1] <= start) lo = mid + 1; else hi = mid;
+          }
+          var first = lo;
+          lo = 0; hi = spans.length;
+          while (lo < hi) {
+            var middle = (lo + hi) >>> 1;
+            if (spans[middle][0] < end) lo = middle + 1; else hi = middle;
+          }
+          var last = lo - 1;
+          if (first <= last && (start > spans[first][0] || end < spans[last][1])) return args[0];
+          return replacer.apply(null, args);
+        });
+      }
 
       function bumpCat(cat) {
         lastCategoryCounts[cat] = (lastCategoryCounts[cat] || 0) + 1;
@@ -655,7 +720,7 @@
           return phToSentinel[ph];
         }
         seq += 1;
-        var s = "\x00\x01__WEB_PH_" + seq + "__\x01\x00";
+        var s = sentinelPrefix + seq + "__\x01\x00";
         sentinelToPh[s] = ph;
         phToSentinel[ph] = s;
         return s;
@@ -669,7 +734,7 @@
       for (i = 0; i < existingPhs.length; i++) {
         var eph = existingPhs[i];
         if (working.indexOf(eph) !== -1) {
-          working = working.split(eph).join(allocSentinel(eph));
+          working = replaceKnownPlaceholder(working, eph, function () { return allocSentinel(eph); });
         }
       }
 
@@ -692,10 +757,11 @@
       for (i = 0; i < allTerms.length; i++) {
         var item = allTerms[i];
         var rx = new RegExp(escapeRegExp(item.word), "gi");
-        working = working.replace(rx, function (matchVal) {
-          if (matchVal.indexOf("\x00\x01__WEB_PH_") !== -1 || isAllowlisted(matchVal)) {
+        protectedReplace(rx, function (matchVal) {
+          if (Object.prototype.hasOwnProperty.call(sentinelToPh, matchVal) || isAllowlisted(matchVal)) {
             return matchVal;
           }
+          matchVal = unprotect(matchVal);
           bumpCat(item.cat);
           var ph = getOrCreatePlaceholder(matchVal, item.cat, "[{category}_{index}]");
           return allocSentinel(ph);
@@ -704,10 +770,11 @@
 
       // Layer 2: Built-in High-Strength Regex Rules + Validators
       function replaceFull(regex, category, tpl, validatorFn) {
-        working = working.replace(regex, function (matchVal) {
-          if (matchVal.indexOf("\x00\x01__WEB_PH_") !== -1 || isAllowlisted(matchVal)) {
+        protectedReplace(regex, function (matchVal) {
+          if (Object.prototype.hasOwnProperty.call(sentinelToPh, matchVal) || isAllowlisted(matchVal)) {
             return matchVal;
           }
+          matchVal = unprotect(matchVal);
           if (validatorFn && !validatorFn(matchVal)) {
             return matchVal;
           }
@@ -718,10 +785,11 @@
       }
 
       function replacePrefixSecretSuffix(regex, category, tpl, validatorFn) {
-        working = working.replace(regex, function (fullMatch, prefix, secret, suffix) {
-          if (!secret || fullMatch.indexOf("\x00\x01__WEB_PH_") !== -1) {
+        protectedReplace(regex, function (fullMatch, prefix, secret, suffix) {
+          if (!secret || Object.prototype.hasOwnProperty.call(sentinelToPh, secret)) {
             return fullMatch;
           }
+          secret = unprotect(secret);
           if (isAllowlisted(secret) || isAllowlisted(fullMatch)) {
             return fullMatch;
           }
@@ -804,19 +872,19 @@
         return b.length - a.length;
       });
       var restoredCount = 0;
+      var restorePrefix = makeSentinelPrefix(sanitizedInput, "\x02__WEB_RES");
       var sentinelToOrig = {};
       var i;
 
       // Stage 1: Exact replacement (longest placeholder first)
       for (i = 0; i < phList.length; i++) {
         var ph = phList[i];
-        if (working.indexOf(ph) !== -1) {
-          var parts = working.split(ph);
-          restoredCount += parts.length - 1;
-          var s = "\x00\x02__WEB_RES_" + i + "__\x02\x00";
+        var s = restorePrefix + i + "__\x02\x00";
+        working = replaceKnownPlaceholder(working, ph, function () {
+          restoredCount += 1;
           sentinelToOrig[s] = placeholderToOriginal[ph];
-          working = parts.join(s);
-        }
+          return s;
+        });
       }
 
       // Stage 2: Fuzzy & Case-Insensitive Restore for AI-mutated placeholders ([API_KEY_1], `API_KEY_1`, <api_key_1>, &lt;API_KEY_1&gt;, {API_KEY_1})
@@ -825,8 +893,10 @@
         var coreMatch = /^[\[<]([A-Z0-9_]+_\d+)[\]>]$/.exec(phKey);
         if (coreMatch) {
           var coreToken = coreMatch[1];
-          var fuzzyRx = new RegExp("(?:&lt;|[\\[<`\\{])" + escapeRegExp(coreToken) + "(?:&gt;|[\\]>'\\}`])", "gi");
-          var sFuzzy = "\x00\x02__WEB_RES_FUZZY_" + i + "__\x02\x00";
+          var token = escapeRegExp(coreToken);
+          var fuzzyRx = new RegExp(
+            "(?:&lt;[ \t]*" + token + "[ \t]*&gt;|\\[[ \t]*" + token + "[ \t]*\\]|<[ \t]*" + token + "[ \t]*>|\\{[ \t]*" + token + "[ \t]*\\}|`[ \t]*" + token + "[ \t]*`)", "gi");
+          var sFuzzy = restorePrefix + "__WEB_RES_FUZZY_" + i + "__\x02\x00";
           working = working.replace(fuzzyRx, function () {
             restoredCount += 1;
             sentinelToOrig[sFuzzy] = placeholderToOriginal[phKey];
@@ -868,14 +938,15 @@
         return b.length - a.length;
       });
       var chipSentinels = {};
+      var chipPrefix = makeSentinelPrefix(safeHtml, "\x03__CHIP");
       for (var i = 0; i < phList.length; i++) {
         var ph = phList[i];
         var escapedPh = escapeHtml(ph);
         if (safeHtml.indexOf(escapedPh) !== -1) {
           var origVal = placeholderToOriginal[ph];
           var cat = originalToCategory[origVal] || "SECRET";
-          var tooltip = "[" + cat + "] Original: " + origVal;
-          var chipSentinel = "\x00\x03__CHIP_" + i + "__\x03\x00";
+          var tooltip = "[" + cat + "] Original: " + (vaultMasked ? "••••••" : origVal);
+          var chipSentinel = chipPrefix + i + "__\x03\x00";
           chipSentinels[chipSentinel] = '<span class="diff-chip" title="' + escapeHtml(tooltip) + '">' + escapedPh + "</span>";
           safeHtml = safeHtml.split(escapedPh).join(chipSentinel);
         }
@@ -896,7 +967,7 @@
       if (diffPreviewActive) {
         txtOut.style.display = "none";
         diffBox.style.display = "block";
-        btn.textContent = isZh ? "🔍 差异高亮预览: 开 (悬停看原值)" : "🔍 Diff Highlight: ON (Hover)";
+        btn.textContent = isZh ? "🔍 差异高亮预览: 开 (遵循原值遮罩)" : "🔍 Diff Highlight: ON (Hover)";
         renderDiffPreview(txtOut.value);
       } else {
         txtOut.style.display = "block";
@@ -913,6 +984,7 @@
         ? (isZh ? "👁️ 显示原始敏感值" : "👁️ Reveal Originals")
         : (isZh ? "🙈 遮罩原始敏感值" : "🙈 Mask Originals");
       renderVaultTable();
+      renderDiffPreview(document.getElementById("txtOutput").value);
     }
 
     function onInputChanged() {
@@ -937,36 +1009,62 @@
       document.getElementById("txtOutput").value = res.text;
       document.getElementById("lblStatsBadge").textContent = (currentLang === "zh" ? "🔄 已还原: " : "🔄 Restored: ") + res.count;
       renderDiffPreview(res.text);
+      document.getElementById("lblStatus").textContent = currentLang === "zh"
+        ? "⚠️ 已还原真实数据；仅在本地使用，分享前请检查"
+        : "⚠️ Original values restored; use locally and review before sharing";
     }
 
     function copyOutputText() {
       var out = document.getElementById("txtOutput");
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(out.value);
-      } else {
-        out.style.display = "block";
-        out.select();
-        document.execCommand("copy");
-        if (diffPreviewActive) {
-          out.style.display = "none";
-        }
+      var generation = sessionGeneration;
+      function report(success) {
+        if (generation !== sessionGeneration) return;
+        document.getElementById("lblStatus").textContent = success
+          ? (currentLang === "zh" ? "📑 已复制右侧结果到剪贴板" : "📑 Copied output to clipboard")
+          : (currentLang === "zh" ? "❌ 复制失败，未确认剪贴板已更新；请检查权限" : "❌ Copy failed; clipboard update not confirmed. Check permissions.");
       }
-      document.getElementById("lblStatus").textContent = currentLang === "zh" ? "📑 已复制右侧结果到剪贴板" : "📑 Copied output to clipboard";
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          return navigator.clipboard.writeText(out.value).then(function () { report(true); })
+            .catch(function () { report(false); });
+        } catch (_error) { report(false); }
+      } else {
+        var previousDisplay = out.style.display;
+        try {
+          out.style.display = "block";
+          out.select();
+          report(Boolean(document.execCommand("copy")));
+        } catch (_error) { report(false); }
+        finally { out.style.display = previousDisplay; }
+      }
     }
 
     function sanitizeClipboardDirect() {
-      if (!navigator.clipboard || !navigator.clipboard.readText) {
+      if (!navigator.clipboard || !navigator.clipboard.readText || !navigator.clipboard.writeText) {
         alert(currentLang === "zh" ? "请在左侧输入框粘贴文本进行脱敏" : "Please paste text into the left box");
         return;
       }
-      navigator.clipboard.readText().then(function (clipText) {
+      var generation = sessionGeneration;
+      return navigator.clipboard.readText().then(function (clipText) {
+        if (generation !== sessionGeneration) return;
         document.getElementById("txtInput").value = clipText || "";
         runSanitizePreview();
         var sanitized = document.getElementById("txtOutput").value;
-        if (sanitized) {
-          navigator.clipboard.writeText(sanitized);
-          document.getElementById("lblStatus").textContent = currentLang === "zh" ? "✅ 已自动读取剪贴板完成脱敏并写回剪贴板！" : "✅ Clipboard sanitized and written back!";
-        }
+        if (!sanitized) return;
+        return navigator.clipboard.readText().then(function (latest) {
+          if (generation !== sessionGeneration) return;
+          if (latest !== clipText) {
+            document.getElementById("lblStatus").textContent = currentLang === "zh" ? "⚠️ 剪贴板已变化，已取消写回，请重新操作" : "⚠️ Clipboard changed; write cancelled. Please retry.";
+            return;
+          }
+          return navigator.clipboard.writeText(sanitized).then(function () {
+            if (generation !== sessionGeneration) return;
+            document.getElementById("lblStatus").textContent = currentLang === "zh" ? "✅ 脱敏结果已写回剪贴板，请检查后再分享" : "✅ Sanitized result written to clipboard; review before sharing";
+          });
+        });
+      }).catch(function () {
+        if (generation !== sessionGeneration) return;
+        document.getElementById("lblStatus").textContent = currentLang === "zh" ? "❌ 剪贴板操作失败，未确认写回；请检查权限或手动粘贴" : "❌ Clipboard operation failed; write not confirmed. Check permissions or paste manually.";
       });
     }
 
@@ -978,21 +1076,30 @@
     function clearSandbox() {
       document.getElementById("txtInput").value = "";
       document.getElementById("txtOutput").value = "";
-      lastCategoryCounts = {};
+      lastCategoryCounts = Object.create(null);
       renderCategorySummaryBar();
       renderDiffPreview("");
       document.getElementById("lblStatsBadge").textContent = currentLang === "zh" ? "已保护: 0 处" : "Masked: 0";
     }
 
     function wipeAllMemory() {
-      originalToPlaceholder = {};
-      placeholderToOriginal = {};
-      originalToCategory = {};
-      categoryCounters = {};
-      lastCategoryCounts = {};
+      sessionGeneration += 1;
+      originalToPlaceholder = Object.create(null);
+      placeholderToOriginal = Object.create(null);
+      originalToCategory = Object.create(null);
+      categoryCounters = Object.create(null);
+      lastCategoryCounts = Object.create(null);
+      Object.keys(customDict).forEach(function (category) { customDict[category] = []; });
+      allowlistItems = [];
+      document.getElementById("inpCustomWord").value = "";
+      document.getElementById("inpAllowlist").value = "";
+      vaultMasked = true;
+      document.getElementById("btnToggleVaultMask").textContent = currentLang === "zh" ? "👁️ 显示原始敏感值" : "👁️ Reveal Originals";
+      renderCustomWords();
+      renderAllowlist();
       clearSandbox();
       renderVaultTable();
-      document.getElementById("lblStatus").textContent = currentLang === "zh" ? "🔥 内存映射表已彻底清空销毁（零残留）" : "🔥 RAM Session Vault completely wiped";
+      document.getElementById("lblStatus").textContent = currentLang === "zh" ? "🔥 已清空会话映射、词条与输入，并恢复原值遮罩" : "🔥 Cleared session mappings, words and inputs; originals masked";
     }
 
     function addCustomWords() {
@@ -1020,19 +1127,32 @@
       }
     }
 
+    function appendWordChip(container, label, onRemove, allowlisted) {
+      var chip = document.createElement("span");
+      chip.style.cssText = "display:inline-block; margin:3px 6px 3px 0; padding:2px 8px; border-radius:6px; border:1px solid " + (allowlisted ? "var(--accent-green)" : "var(--border)") + "; background:var(--bg-panel);";
+      chip.appendChild(document.createTextNode(label + " "));
+      var remove = document.createElement("a");
+      remove.href = "#";
+      remove.style.cssText = "color:var(--accent-red); text-decoration:none; font-weight:bold;";
+      remove.textContent = "×";
+      remove.addEventListener("click", function (event) {
+        event.preventDefault();
+        onRemove();
+      });
+      chip.appendChild(remove);
+      container.appendChild(chip);
+    }
+
     function renderCustomWords() {
       var container = document.getElementById("customWordsContainer");
-      var html = "";
-      var cats = Object.keys(customDict);
-      for (var i = 0; i < cats.length; i++) {
-        var c = cats[i];
-        var words = customDict[c];
-        for (var j = 0; j < words.length; j++) {
-          var w = words[j];
-          html += '<span style="display:inline-block; margin:3px 6px 3px 0; padding:2px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-panel);">[' + c + "] " + escapeHtml(w) + ' <a href="javascript:void(0)" style="color:var(--accent-red); text-decoration:none; font-weight:bold;" onclick="removeCustomWord(\'' + c + '\', \'' + w.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + '\')">×</a></span>';
-        }
-      }
-      container.innerHTML = html;
+      container.textContent = "";
+      Object.keys(customDict).forEach(function (category) {
+        customDict[category].forEach(function (word) {
+          appendWordChip(container, "[" + category + "] " + word, function () {
+            removeCustomWord(category, word);
+          }, false);
+        });
+      });
     }
 
     function addAllowlistWords() {
@@ -1063,12 +1183,12 @@
 
     function renderAllowlist() {
       var container = document.getElementById("allowlistContainer");
-      var html = "";
-      for (var i = 0; i < allowlistItems.length; i++) {
-        var w = allowlistItems[i];
-        html += '<span style="display:inline-block; margin:3px 6px 3px 0; padding:2px 8px; border-radius:6px; border:1px solid var(--accent-green); background:var(--bg-panel);">🛡️ ' + escapeHtml(w) + ' <a href="javascript:void(0)" style="color:var(--accent-red); text-decoration:none; font-weight:bold;" onclick="removeAllowlistWord(\'' + w.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + '\')">×</a></span>';
-      }
-      container.innerHTML = html;
+      container.textContent = "";
+      allowlistItems.forEach(function (word) {
+        appendWordChip(container, "🛡️ " + word, function () {
+          removeAllowlistWord(word);
+        }, true);
+      });
     }
 
     function renderVaultTable() {
@@ -1109,7 +1229,7 @@
       document.getElementById("btnClipSanitize").textContent = isZh ? "📋 读取剪贴板并脱敏" : "📋 Sanitize Clipboard";
       document.getElementById("btnLoadSample").textContent = isZh ? "📋 载入全场景测试样本" : "📋 Load Full Sample";
       document.getElementById("btnClearBox").textContent = isZh ? "🧹 清空文本框" : "🧹 Clear Boxes";
-      document.getElementById("btnWipeVault").textContent = isZh ? "🔥 立即销毁内存映射表" : "🔥 Wipe RAM Vault";
+      document.getElementById("btnWipeVault").textContent = isZh ? "🔥 清空当前会话" : "🔥 Wipe Current Session";
       document.getElementById("lblLeftTitle").textContent = isZh ? "📥 原始文本 / AI 回复文本 (Input)" : "📥 Raw Input / AI Reply (Input)";
       document.getElementById("lblInputHint").textContent = isZh ? "支持实时输入自动脱敏 & AI 变形占位符容错还原" : "Live auto-sanitize & fuzzy restore for AI-mutated placeholders";
       document.getElementById("txtInput").placeholder = isZh ? "在此粘贴代码、日志、.env、密码-123123、账号=asdasd、C:\\Users\\YourName\\..." : "Paste raw code, logs, .env, passwords, API keys, or AI replies here...";
@@ -1127,7 +1247,7 @@
       document.getElementById("thCategory").textContent = isZh ? "类别 (Category)" : "Category";
       document.getElementById("thOriginal").textContent = isZh ? "原始敏感值 (仅存内存)" : "Original Secret (RAM Only)";
       document.getElementById("btnToggleVaultMask").textContent = vaultMasked ? (isZh ? "👁️ 显示原始敏感值" : "👁️ Reveal Originals") : (isZh ? "🙈 遮罩原始敏感值" : "🙈 Mask Originals");
-      document.getElementById("btnToggleDiffView").textContent = diffPreviewActive ? (isZh ? "🔍 差异高亮预览: 开 (悬停看原值)" : "🔍 Diff Highlight: ON (Hover)") : (isZh ? "🔍 差异高亮预览: 关" : "🔍 Diff Highlight: OFF");
+      document.getElementById("btnToggleDiffView").textContent = diffPreviewActive ? (isZh ? "🔍 差异高亮预览: 开 (遵循原值遮罩)" : "🔍 Diff Highlight: ON (Hover)") : (isZh ? "🔍 差异高亮预览: 关" : "🔍 Diff Highlight: OFF");
       renderDiffPreview(document.getElementById("txtOutput").value);
       renderVaultTable();
     }

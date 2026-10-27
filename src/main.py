@@ -7,8 +7,9 @@ import platform
 import subprocess
 import sys
 import threading
+import tempfile
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PIL import Image, ImageDraw
 
@@ -22,14 +23,13 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
+from src import APP_NAME
 from src.gui import GuiController, enable_high_dpi_awareness
 from src.i18n import tr
 from src.rules import SAMPLE_TEST_PAYLOAD
-from src.sanitizer import PrivacySanitizer
+from src.sanitizer import HotkeyRollbackError, InputTooLargeError, MAX_SANITIZE_CHARS, PrivacySanitizer
+from src.secure_io import atomic_write_private, validate_private_path
 from src.startup import SingleInstanceGuard, is_startup_enabled, set_startup_enabled
-
-
-APP_NAME = "AI Privacy Sanitizer"
 
 
 def create_shield_lock_icon(size: int = 64) -> Image.Image:
@@ -140,6 +140,21 @@ def _safe_clipboard_copy(text: str, retries: int = 3) -> None:
         raise last_err
 
 
+def _replace_clipboard_if_unchanged(expected: str, replacement: str) -> bool:
+    """Recheck before every write attempt; pyperclip cannot provide an OS-wide atomic CAS."""
+    for attempt in range(3):
+        if _safe_clipboard_paste() != expected:
+            return False
+        try:
+            _safe_clipboard_copy(replacement, retries=1)
+            return True
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(0.05)
+    return False
+
+
 class SanitizerTrayApp:
     """System tray controller managing GUI, clipboard cruise mode, sanitization, restoration, and hotkeys."""
 
@@ -150,6 +165,8 @@ class SanitizerTrayApp:
         self._stop_event = threading.Event()
         self._last_written_clipboard: str = ""
         self._clipboard_undo_stack: List[str] = []
+        self._last_oversize_notice = float("-inf")
+        self._windows_hotkeys = None
         self.gui = GuiController(
             sanitizer=self.sanitizer,
             icon_factory=create_shield_lock_icon,
@@ -160,6 +177,7 @@ class SanitizerTrayApp:
             on_exit_app=self.exit_app,
             on_reload_hotkeys=self.reload_hotkeys,
             on_language_changed=self.refresh_tray_i18n,
+            on_clear_session=self.clear_session_map,
         )
 
     def _t(self, key: str) -> str:
@@ -204,21 +222,27 @@ class SanitizerTrayApp:
             try:
                 raw_text = _safe_clipboard_paste()
             except Exception as exc:
-                self.notify(self._t("notify_clip_read_err").format(err=exc))
+                self.notify(self._t("notify_clip_read_err").format(err="unavailable"))
                 return
 
             if not raw_text or not raw_text.strip():
                 self.notify(self._t("notify_clip_empty_san"))
                 return
 
-            result = self.sanitizer.sanitize(raw_text)
+            try:
+                result = self.sanitizer.sanitize(raw_text)
+            except InputTooLargeError:
+                self.notify(self._t("notify_input_too_large"))
+                return
             if result.total_count > 0:
                 try:
+                    if not _replace_clipboard_if_unchanged(raw_text, result.sanitized_text):
+                        self.notify(self._t("notify_clip_changed"))
+                        return
                     self._push_undo_snapshot(raw_text)
                     self._last_written_clipboard = result.sanitized_text
-                    _safe_clipboard_copy(result.sanitized_text)
                 except Exception as exc:
-                    self.notify(self._t("notify_clip_write_err").format(err=exc))
+                    self.notify(self._t("notify_clip_write_err").format(err="unavailable"))
                     return
                 self.gui.request_refresh()
 
@@ -230,7 +254,7 @@ class SanitizerTrayApp:
             try:
                 raw_text = _safe_clipboard_paste()
             except Exception as exc:
-                self.notify(self._t("notify_clip_read_err").format(err=exc))
+                self.notify(self._t("notify_clip_read_err").format(err="unavailable"))
                 return
 
             if not raw_text or not raw_text.strip():
@@ -240,14 +264,16 @@ class SanitizerTrayApp:
             result = self.sanitizer.restore(raw_text)
             if result.restored_count > 0:
                 try:
+                    if not _replace_clipboard_if_unchanged(raw_text, result.restored_text):
+                        self.notify(self._t("notify_clip_changed"))
+                        return
                     self._last_written_clipboard = result.restored_text
-                    _safe_clipboard_copy(result.restored_text)
                 except Exception as exc:
-                    self.notify(self._t("notify_clip_write_err").format(err=exc))
+                    self.notify(self._t("notify_clip_write_err").format(err="unavailable"))
                     return
                 self.gui.request_refresh()
 
-            self.notify(result.format_summary(self.sanitizer.language))
+            self.notify(result.format_summary(self.sanitizer.language) + " · " + self._t("msg_restore_warning"))
 
     def undo_last_sanitize(self, *_args) -> None:
         """Restore clipboard to the previous pre-sanitized raw text from the in-memory undo stack."""
@@ -255,16 +281,20 @@ class SanitizerTrayApp:
             if not self._clipboard_undo_stack:
                 self.notify(self._t("notify_undo_empty"))
                 return
-            previous_raw = self._clipboard_undo_stack.pop()
+            previous_raw = self._clipboard_undo_stack[-1]
             try:
+                current = _safe_clipboard_paste()
+                if not _replace_clipboard_if_unchanged(current, previous_raw):
+                    self.notify(self._t("notify_clip_changed"))
+                    return
+                self._clipboard_undo_stack.pop()
                 self._last_written_clipboard = previous_raw
-                _safe_clipboard_copy(previous_raw)
                 self.gui.request_refresh()
                 self.notify(
                     self._t("notify_undo_ok").format(left=len(self._clipboard_undo_stack))
                 )
             except Exception as exc:
-                self.notify(self._t("notify_clip_write_err").format(err=exc))
+                self.notify(self._t("notify_clip_write_err").format(err="unavailable"))
 
     def open_gui_center(self, *_args) -> None:
         """Show the visual GUI Control Center window."""
@@ -298,7 +328,8 @@ class SanitizerTrayApp:
         """Clear all in-memory bidirectional mappings and undo history."""
         with self._action_lock:
             self._clipboard_undo_stack.clear()
-        cleared = self.sanitizer.clear_session()
+            self._last_written_clipboard = ""
+            cleared = self.sanitizer.clear_session()
         self.gui.request_refresh()
         self.notify(self._t("notify_vault_cleared").format(count=cleared))
 
@@ -307,12 +338,16 @@ class SanitizerTrayApp:
         self._stop_event.set()
         with self._action_lock:
             self._clipboard_undo_stack.clear()
-        try:
-            import keyboard
+        if platform.system() == "Windows":
+            if self._windows_hotkeys is not None:
+                self._windows_hotkeys.stop()
+        elif platform.system() != "Darwin":
+            try:
+                import keyboard
 
-            keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
+                keyboard.unhook_all_hotkeys()
+            except Exception:
+                pass
 
         if self.icon is not None:
             try:
@@ -321,57 +356,75 @@ class SanitizerTrayApp:
                 pass
         self.gui.shutdown()
 
+    def _cruise_once(self, last_seen: str) -> str:
+        """Process one polling step; all application clipboard state shares the action lock."""
+        with self._action_lock:
+            if not self.sanitizer.auto_sanitize_clipboard:
+                return last_seen
+            try:
+                current = _safe_clipboard_paste()
+                if current != self._last_written_clipboard:
+                    self._last_written_clipboard = ""
+                if not current or current == last_seen or current == self._last_written_clipboard:
+                    return current
+                try:
+                    result = self.sanitizer.sanitize(current)
+                except InputTooLargeError:
+                    now = time.monotonic()
+                    if now - self._last_oversize_notice >= 30:
+                        self.notify(self._t("notify_input_too_large"))
+                        self._last_oversize_notice = now
+                    return current
+                if result.total_count and _replace_clipboard_if_unchanged(current, result.sanitized_text):
+                    self._push_undo_snapshot(current)
+                    self._last_written_clipboard = result.sanitized_text
+                    self.gui.request_refresh()
+                    self.notify(self._t("notify_cruise_hit").format(
+                        summary=result.format_summary(self.sanitizer.language)
+                    ))
+                    return result.sanitized_text
+                return current
+            except Exception:
+                # Keep last_seen unchanged on read/write failure so the next poll can retry.
+                return last_seen
+
     def _start_clipboard_cruise_watcher(self) -> None:
-        """Background daemon thread that auto-sanitizes clipboard when cruise mode is enabled."""
+        """Best-effort polling; never promises to intercept a paste in another application."""
         def _cruise_loop() -> None:
             last_seen = ""
-            try:
-                last_seen = _safe_clipboard_paste()
-            except Exception:
-                pass
-
-            while not self._stop_event.is_set():
-                time.sleep(0.55)
-                if not self.sanitizer.auto_sanitize_clipboard:
-                    continue
-                try:
-                    current = _safe_clipboard_paste()
-                except Exception:
-                    continue
-
-                if (
-                    not current
-                    or not current.strip()
-                    or len(current) > 1_000_000
-                    or current == last_seen
-                    or current == self._last_written_clipboard
-                ):
-                    last_seen = current or ""
-                    continue
-
-                last_seen = current
-                with self._action_lock:
-                    res = self.sanitizer.sanitize(current)
-                    if res.total_count > 0:
-                        try:
-                            self._push_undo_snapshot(current)
-                            self._last_written_clipboard = res.sanitized_text
-                            last_seen = res.sanitized_text
-                            _safe_clipboard_copy(res.sanitized_text)
-                            self.gui.request_refresh()
-                            summary_body = res.format_summary(self.sanitizer.language)[1:]
-                            self.notify(self._t("notify_cruise_hit").format(summary=summary_body))
-                        except Exception:
-                            pass
+            while not self._stop_event.wait(0.55):
+                last_seen = self._cruise_once(last_seen)
 
         threading.Thread(target=_cruise_loop, daemon=True).start()
 
-    def register_hotkeys(self) -> bool:
-        """Register global hotkeys from `config.json`."""
-        hotkeys = self.sanitizer.hotkeys
+    def register_hotkeys(self, hotkeys: Optional[Dict[str, str]] = None) -> bool:
+        """Register persisted settings or a candidate that has not been saved yet."""
+        if platform.system() == "Darwin":
+            # keyboard's current Darwin backend requires root. Keep the preview unprivileged.
+            return False
+        hotkeys = self.sanitizer.hotkeys if hotkeys is None else hotkeys
         sanitize_key = hotkeys.get("sanitize", "alt+s")
         restore_key = hotkeys.get("restore", "alt+r")
         try:
+            if platform.system() == "Windows":
+                from src.windows_hotkeys import WindowsHotkeys
+
+                previous = getattr(self, "_windows_hotkeys", None)
+                candidate = WindowsHotkeys([
+                    (sanitize_key, lambda: threading.Thread(target=self.sanitize_clipboard, daemon=True).start()),
+                    (restore_key, lambda: threading.Thread(target=self.restore_clipboard, daemon=True).start()),
+                ])
+                if previous is not None:
+                    previous.stop()
+                try:
+                    candidate.start()
+                except Exception:
+                    if previous is not None:
+                        previous.start()
+                    raise
+                self._windows_hotkeys = candidate
+                return True
+
             import keyboard
 
             keyboard.add_hotkey(
@@ -404,24 +457,53 @@ class SanitizerTrayApp:
             except Exception:
                 pass
 
-    def reload_hotkeys(self) -> bool:
-        """Unhook existing global hotkeys and register the newly configured hotkeys immediately."""
-        try:
-            import keyboard
+    def _reload_hotkey_registration(self, hotkeys: Dict[str, str]) -> bool:
+        """Replace platform registrations without changing the persisted settings."""
+        if platform.system() != "Windows":
+            try:
+                import keyboard
 
-            keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
-        ok = self.register_hotkeys()
+                keyboard.unhook_all_hotkeys()
+            except Exception:
+                pass
+        return self.register_hotkeys(hotkeys)
+
+    def reload_hotkeys(self, hotkeys: Optional[Dict[str, str]] = None) -> bool:
+        """Apply a candidate before committing it; a failed registration never writes settings."""
+        if platform.system() == "Darwin":
+            self.refresh_tray_i18n()
+            return False
+        previous = self.sanitizer.hotkeys
+        candidate = previous if hotkeys is None else self.sanitizer.normalize_hotkeys(
+            hotkeys["sanitize"], hotkeys["restore"]
+        )
+        if not self._reload_hotkey_registration(candidate):
+            # Windows restores its prior owner internally; the other backend needs
+            # to reinstall it after removing the failed candidate's registrations.
+            if platform.system() != "Windows":
+                self._reload_hotkey_registration(previous)
+            return False
+        if hotkeys is not None:
+            try:
+                self.sanitizer.set_hotkeys(candidate["sanitize"], candidate["restore"])
+            except Exception as error:
+                # Atomic persistence kept the previous configuration intact. Restore
+                # the native bindings without attempting a second configuration write.
+                if not self._reload_hotkey_registration(previous):
+                    raise HotkeyRollbackError("Active global hotkeys could not be restored") from error
+                raise
         self.refresh_tray_i18n()
-        return ok
+        return True
 
     def run(self, show_gui_on_start: bool = False) -> None:
         """Start global hotkeys, cruise watcher, background system tray icon, and main-thread GUI loop."""
         import pystray
         from pystray import Menu, MenuItem
 
-        self.register_hotkeys()
+        if platform.system() == "Darwin":
+            self.gui.startup_status = self._t("macos_preview_hotkeys")
+        else:
+            self.gui.startup_status = None if self.register_hotkeys() else self._t("msg_hk_err")
         self._start_clipboard_cruise_watcher()
 
         icon_image = create_shield_lock_icon(64)
@@ -464,18 +546,39 @@ class SanitizerTrayApp:
         )
 
         hk = self.sanitizer.hotkeys
-        self.icon = pystray.Icon(
-            name="ai-privacy-sanitizer",
-            icon=icon_image,
-            title=self._t("tray_tooltip").format(
-                app=APP_NAME,
-                san=hk.get("sanitize", "alt+s").upper(),
-                res=hk.get("restore", "alt+r").upper(),
-            ),
-            menu=menu,
-        )
-        threading.Thread(target=self.icon.run, daemon=True).start()
-        self.gui.run_main_loop(show_on_start=show_gui_on_start)
+
+        def _start_tray() -> None:
+            options = {}
+            if platform.system() == "Darwin":
+                # Tk must create its NSApplication before AppKit obtains the shared instance.
+                import AppKit
+
+                options["darwin_nsapplication"] = AppKit.NSApplication.sharedApplication()
+            self.icon = pystray.Icon(
+                name="ai-privacy-sanitizer",
+                icon=icon_image,
+                title=self._t("tray_tooltip").format(
+                    app=APP_NAME,
+                    san=hk.get("sanitize", "alt+s").upper(),
+                    res=hk.get("restore", "alt+r").upper(),
+                ),
+                menu=menu,
+                **options,
+            )
+            self._start_tray_loop()
+
+        if platform.system() == "Darwin":
+            self.gui.run_main_loop(show_on_start=show_gui_on_start, before_mainloop=_start_tray)
+        else:
+            _start_tray()
+            self.gui.run_main_loop(show_on_start=show_gui_on_start)
+
+    def _start_tray_loop(self) -> None:
+        """Integrate macOS menu-bar events into Tk's main thread; retain other backends."""
+        if platform.system() == "Darwin":
+            self.icon.run_detached()
+        else:
+            threading.Thread(target=self.icon.run, daemon=True).start()
 
 
 def _configure_stdio_utf8() -> None:
@@ -491,17 +594,21 @@ def _configure_stdio_utf8() -> None:
 def run_self_test() -> int:
     """Run a quick CLI self-test verifying icon generation, sanitization, and 100% restoration."""
     _configure_stdio_utf8()
-    sanitizer = PrivacySanitizer()
-    icon = create_shield_lock_icon(64)
-    assert icon.size == (64, 64)
+    with tempfile.TemporaryDirectory(prefix="aps-self-test-") as temporary:
+        root = Path(temporary).resolve()
+        sanitizer = PrivacySanitizer(
+            config_path=root / "config.json", example_config_path=root / "unused-example.json"
+        )
+        icon = create_shield_lock_icon(64)
+        assert icon.size == (64, 64)
 
-    san_res = sanitizer.sanitize(SAMPLE_TEST_PAYLOAD)
-    res_res = sanitizer.restore(san_res.sanitized_text)
-    assert res_res.restored_text == SAMPLE_TEST_PAYLOAD, "Restoration mismatch!"
-    if sys.stdout is not None:
-        sys.stdout.write(f"{san_res.format_summary()}\n")
-        sys.stdout.write(f"{res_res.format_summary()}\n")
-    return 0
+        san_res = sanitizer.sanitize(SAMPLE_TEST_PAYLOAD)
+        res_res = sanitizer.restore(san_res.sanitized_text)
+        assert res_res.restored_text == SAMPLE_TEST_PAYLOAD, "Restoration mismatch!"
+        if sys.stdout is not None:
+            sys.stdout.write(f"{san_res.format_summary()}\n")
+            sys.stdout.write(f"{res_res.format_summary()}\n")
+        return 0
 
 
 def main(
@@ -510,7 +617,7 @@ def main(
 ) -> int:
     enable_high_dpi_awareness()
     parser = argparse.ArgumentParser(
-        description="ai-privacy-sanitizer: 100% Local Clipboard & CLI Privacy Sanitizer & Restorer"
+        description="Sanitizer: 100% Local Clipboard & CLI Privacy Sanitizer & Restorer"
     )
     parser.add_argument(
         "--self-test",
@@ -549,6 +656,7 @@ def main(
         default="",
         help="Path to input file to sanitize locally",
     )
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing output file (never the input file)")
     parser.add_argument(
         "--output",
         type=str,
@@ -559,7 +667,7 @@ def main(
         "--vault-file",
         type=str,
         default="",
-        help="Optional path to save/load session vault mappings for cross-process CLI restoration",
+        help="Opt-in PLAINTEXT secret mappings for local CLI restoration; keep outside Git and synced/shared folders",
     )
     args = parser.parse_args(argv)
 
@@ -572,52 +680,58 @@ def main(
 
     if args.stdin or args.restore_stdin or args.file:
         _configure_stdio_utf8()
-        active_sanitizer = sanitizer or PrivacySanitizer()
-        vault_path = Path(args.vault_file) if args.vault_file else None
-        if vault_path is not None and vault_path.exists():
-            active_sanitizer.vault.load_from_file(vault_path)
-
-        if args.stdin:
-            raw_input = sys.stdin.read() if sys.stdin is not None else ""
-            san_res = active_sanitizer.sanitize(raw_input)
+        try:
+            if sum(bool(value) for value in (args.stdin, args.restore_stdin, args.file)) != 1:
+                raise ValueError("Choose exactly one CLI input mode")
+            if args.output and not args.file:
+                raise ValueError("--output requires --file")
+            active_sanitizer = sanitizer or PrivacySanitizer()
+            in_path = Path(args.file) if args.file else None
+            out_path = validate_private_path(Path(args.output)) if args.output else None
+            vault_path = validate_private_path(Path(args.vault_file)) if args.vault_file else None
+            paths = [p for p in (in_path, out_path, vault_path, active_sanitizer.config_path) if p is not None]
+            for index, left in enumerate(paths):
+                for right in paths[index + 1:]:
+                    if left.resolve() == right.resolve() or (
+                        left.exists() and right.exists() and os.path.samefile(left, right)
+                    ):
+                        raise ValueError("Input, output, vault and config paths must be distinct files")
+            if out_path is not None and out_path.exists() and not args.overwrite:
+                raise FileExistsError("Output already exists; use --overwrite to replace it")
             if vault_path is not None:
-                active_sanitizer.vault.save_to_file(vault_path)
-            if sys.stdout is not None:
-                sys.stdout.write(san_res.sanitized_text)
-                sys.stdout.flush()
-            if sys.stderr is not None:
-                sys.stderr.write(f"{san_res.format_summary(active_sanitizer.language)}\n")
-                sys.stderr.flush()
-            return 0
-
-        if args.restore_stdin:
-            raw_input = sys.stdin.read() if sys.stdin is not None else ""
-            res_res = active_sanitizer.restore(raw_input)
-            if sys.stdout is not None:
-                sys.stdout.write(res_res.restored_text)
-                sys.stdout.flush()
-            if sys.stderr is not None:
-                sys.stderr.write(f"{res_res.format_summary(active_sanitizer.language)}\n")
-                sys.stderr.flush()
-            return 0
-
-        if args.file:
-            in_path = Path(args.file)
-            raw_input = in_path.read_text(encoding="utf-8")
-            san_res = active_sanitizer.sanitize(raw_input)
-            if vault_path is not None:
-                active_sanitizer.vault.save_to_file(vault_path)
-            if args.output:
-                out_path = Path(args.output)
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_text(san_res.sanitized_text, encoding="utf-8")
+                sys.stderr.write("Warning: --vault-file stores original secrets as local plaintext. Avoid shared/synced folders.\n")
+                active_sanitizer.vault.load_from_file(vault_path)
+            if in_path is not None:
+                with in_path.open(encoding="utf-8") as stream:
+                    raw_input = stream.read(MAX_SANITIZE_CHARS + 1)
+            else:
+                raw_input = sys.stdin.read(MAX_SANITIZE_CHARS + 1) if sys.stdin is not None else ""
+            if len(raw_input) > MAX_SANITIZE_CHARS:
+                raise InputTooLargeError()
+            if args.restore_stdin:
+                result = active_sanitizer.restore(raw_input)
+                output = result.restored_text
+                sys.stderr.write("Warning: restored output contains original values; review locally before sharing.\n")
+            else:
+                result = active_sanitizer.sanitize(raw_input)
+                output = result.sanitized_text
+                if vault_path is not None:
+                    active_sanitizer.vault.save_to_file(vault_path)
+            if out_path is not None:
+                atomic_write_private(out_path, output, overwrite=args.overwrite)
             elif sys.stdout is not None:
-                sys.stdout.write(san_res.sanitized_text)
+                sys.stdout.write(output)
                 sys.stdout.flush()
             if sys.stderr is not None:
-                sys.stderr.write(f"{san_res.format_summary(active_sanitizer.language)}\n")
+                sys.stderr.write(f"{result.format_summary(active_sanitizer.language)}\n")
                 sys.stderr.flush()
             return 0
+        except InputTooLargeError:
+            sys.stderr.write(f"Error: input exceeds {MAX_SANITIZE_CHARS:,} characters; no output produced.\n")
+        except (OSError, ValueError):
+            # Paths, parser errors and exception objects may contain secrets. Never echo them.
+            sys.stderr.write("Error: CLI operation failed; check distinct paths, private permissions, valid JSON and --overwrite. No text output produced.\n")
+        return 2
 
     guard = SingleInstanceGuard(force_replace=args.replace)
     if guard.already_running:

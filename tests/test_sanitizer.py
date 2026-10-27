@@ -605,14 +605,17 @@ def test_gui_preserves_sandbox_and_inputs_across_theme_and_language_toggle(temp_
     config_path, example_path = temp_config_dir
     sanitizer = PrivacySanitizer(config_path=config_path, example_config_path=example_path)
 
+    import tkinter as tk
+    from src.gui import _StableCTk
     try:
-        from src.gui import _ModernControlCenter
-        win = _ModernControlCenter(sanitizer=sanitizer)
-        win.root.withdraw()
-    except Exception:
-        return
-
+        root = _StableCTk()
+    except tk.TclError as exc:
+        if "display" in str(exc).lower():
+            pytest.skip("A Tk display is unavailable; no visual verification is performed")
+        raise
+    root.withdraw()
     try:
+        win = _ModernControlCenter(root=root, sanitizer=sanitizer)
         # User types custom text into Live Sandbox and other inputs
         custom_raw = "MY_CUSTOM_INPUT: password = SuperSecret9988, token = ghp_1234567890abcdef1234567890"
         win.sandbox_input.delete("1.0", "end")
@@ -624,20 +627,34 @@ def test_gui_preserves_sandbox_and_inputs_across_theme_and_language_toggle(temp_
         win.entry_allowlist.delete(0, "end")
         win.entry_allowlist.insert(0, "10.0.0.1")
         win.vault_search_var.set("DB_PASS")
+        win._show_page("sandbox")
+        sanitizer.set_auto_sanitize_clipboard(True)
+        sanitizer.set_semantic_ip_mode(True)
+        previous_theme, previous_language = sanitizer.theme, sanitizer.language
+        previous_container = win._main_container
 
         expected_output = win.sandbox_output.get("1.0", "end").rstrip("\n")
         assert "[DB_PASS_1]" in expected_output
 
         # 1. Toggle Light / Dark Theme -> must NOT reset sandbox_input or sandbox_output
         win._toggle_theme()
+        assert sanitizer.theme == win.theme_mode != previous_theme
+        assert win._main_container is previous_container
+        assert root.state() == "withdrawn"
         assert win.sandbox_input.get("1.0", "end").rstrip("\n") == custom_raw
         assert win.sandbox_output.get("1.0", "end").rstrip("\n") == expected_output
         assert win.entry_new_word.get() == "DraftCompany"
         assert win.entry_allowlist.get() == "10.0.0.1"
         assert win.vault_search_var.get() == "DB_PASS"
 
-        # 2. Toggle Language (ZH <-> EN) -> rebuilds layout but must restore all inputs
+        # 2. Toggle Language (ZH <-> EN) in place without replacing any inputs.
         win._toggle_language()
+        assert sanitizer.language == win.lang != previous_language
+        assert win._main_container is previous_container
+        assert previous_container.winfo_exists()
+        assert win._active_page_key == "sandbox"
+        assert sanitizer.auto_sanitize_clipboard and sanitizer.semantic_ip_mode
+        assert root.state() == "withdrawn"
         assert win.sandbox_input.get("1.0", "end").rstrip("\n") == custom_raw
         assert win.sandbox_output.get("1.0", "end").rstrip("\n") == expected_output
         assert win.entry_new_word.get() == "DraftCompany"
@@ -650,8 +667,5 @@ def test_gui_preserves_sandbox_and_inputs_across_theme_and_language_toggle(temp_
         assert win.sandbox_input.get("1.0", "end").rstrip("\n") == ""
         assert win.sandbox_output.get("1.0", "end").rstrip("\n") == ""
     finally:
-        try:
-            win.root.destroy()
-        except Exception:
-            pass
+        root.destroy()
 

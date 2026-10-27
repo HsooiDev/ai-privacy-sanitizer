@@ -1,12 +1,24 @@
 """Bilingual (Simplified Chinese & English) localization strings for AI Privacy Sanitizer."""
 
 from typing import Dict
+from src import APP_NAME
 
 
 STRINGS: Dict[str, Dict[str, str]] = {
     "zh": {
-        "window_title": "🛡️ AI Privacy Sanitizer · 隐私脱敏控制中心",
-        "brand_title": "AI Privacy Sanitizer",
+        "macos_preview_hotkeys": "macOS 实验版：暂不注册全局快捷键，请使用界面或菜单栏按钮；无需管理员权限。",
+        'notify_input_too_large': '⚠️ 超过 1,500,000 字符，未处理；剪贴板原文仍未脱敏，请勿直接粘贴到外部服务',
+        'notify_clip_changed': '⚠️ 剪贴板内容已变化，已取消写回，请重新操作',
+        'msg_operation_failed': '操作失败，请检查格式、文件权限与安全保存位置。',
+        'msg_export_warning': '导出文件包含自定义敏感词条和可能的凭证。请保存在私有目录，避免 Git、共享或云同步位置。',
+        'msg_restore_warning': '已恢复真实数据；仅在本地使用，分享前请检查',
+        'msg_copied': '📋 已复制到剪贴板',
+        "window_title": APP_NAME,
+        "brand_title": APP_NAME,
+        "btn_about": "关于",
+        "about_title": "关于 Sanitizer",
+        "about_version": "版本 {version}",
+        "about_description": "在本机进行敏感内容脱敏与还原的工具。",
         "brand_subtitle": "100% 本地内存运行 · 零网络请求 · 双向无损还原",
         "btn_lang": "🌐 EN / 简中",
         "btn_theme_dark": "🌙 暗色模式",
@@ -33,7 +45,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "stat_rules_unit": "项全自动启用",
         "switches_section_title": "⚡ 自动化与高级偏好设置（点击开关立即生效）",
         "sw_cruise_title": "⚡ 复制即自动脱敏（懒人巡航模式）",
-        "sw_cruise_desc": "开启后，平时按 Ctrl+C 复制任何文字会自动在 0.5 秒内完成脱敏，直接去 ChatGPT/Claude 按 Ctrl+V 粘贴即可",
+        "sw_cruise_desc": "约每 0.55 秒尽力检查（上限 1,500,000 字符），不保证粘贴前完成；敏感文本请手动脱敏并检查结果",
         "sw_semantic_title": "🌐 同类型语义 IP 伪装 (192.0.2.x)",
         "sw_semantic_desc": "将真实内网/公网 IP 伪装为合法测试 IP（如 192.0.2.101），避免 AI 在分析服务器或网络配置时报错",
         "sw_startup_title": "🚀 开机自动启动 (Windows Startup)",
@@ -47,7 +59,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "btn_hk_save": "💾 保存并立即生效",
         "btn_hk_reset": "↺ 恢复默认",
         "msg_hk_saved": "✅ 全局快捷键已更新并立即生效：脱敏 [{san}] | 还原 [{res}]",
-        "msg_hk_err": "❌ 快捷键格式无效或两个快捷键不能相同，请重新设置",
+        "msg_hk_err": "❌ 快捷键格式无效、重复或已被系统/其他程序占用，请重新设置",
+        "msg_hk_rollback_err": "❌ 设置未保存，但无法确认旧快捷键已恢复。请暂用界面/托盘按钮，并重新应用快捷键。",
         "workflow_title": "💡 3 秒极简日常用法",
         "workflow_steps": (
             "① 复制代码或日志 (Ctrl+C)   ➔   "
@@ -133,7 +146,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "notify_startup_err": "❌ 修改开机自动启动设置失败",
         "notify_vault_cleared": "🧹 已清空当前内存映射表（共释放 {count} 条记录）",
         # Tutorial Content
-        "tutorial_body": """🛡️ 欢迎使用 AI Privacy Sanitizer —— 零门槛极速指南
+        "tutorial_body": """🛡️ 欢迎使用 Sanitizer —— 零门槛极速指南
 
 1. 我需要先填写资料才能用吗？
    完全不需要！本软件开箱即用（Zero-Config Ready）。
@@ -154,7 +167,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
 
    【懒人自动巡航模式】
    如果您在【🏠 首页总览】打开了“⚡ 复制即自动脱敏”开关，那么连 Alt + S 都不用按！
-   只要按 Ctrl + C 复制文本，0.5 秒内自动完成脱敏，直接去 AI 粘贴即可。
+   约每 0.55 秒尽力检查，上限 1,500,000 字符；不保证粘贴前完成，请先检查脱敏结果。
 
 3. 什么时候需要用【📚 选填词库】？
    只有当您想额外隐藏特定的“公司名字”（如某某 Sdn Bhd）、“客户名字”或“项目代号”时，
@@ -167,8 +180,19 @@ STRINGS: Dict[str, Dict[str, str]] = {
 """,
     },
     "en": {
-        "window_title": "🛡️ AI Privacy Sanitizer · Control Center",
-        "brand_title": "AI Privacy Sanitizer",
+        "macos_preview_hotkeys": "macOS preview: global hotkeys are disabled; use GUI or menu-bar buttons. No administrator privileges required.",
+        'notify_input_too_large': '⚠️ Over 1,500,000 characters; not processed. Clipboard remains UNSANITIZED; do not paste into external services.',
+        'notify_clip_changed': '⚠️ Clipboard changed; write cancelled. Please retry.',
+        'msg_operation_failed': 'Operation failed. Check format, permissions and private file location.',
+        'msg_export_warning': 'Export includes custom sensitive terms and possibly credentials. Use a private folder outside Git, sharing and cloud sync.',
+        'msg_restore_warning': 'Original values restored; use locally and review before sharing',
+        'msg_copied': '📋 Copied to clipboard',
+        "window_title": APP_NAME,
+        "brand_title": APP_NAME,
+        "btn_about": "About",
+        "about_title": "About Sanitizer",
+        "about_version": "Version {version}",
+        "about_description": "A local tool for sanitizing and restoring sensitive content.",
         "brand_subtitle": "100% Local In-Memory · Zero Network Requests · Lossless Restore",
         "btn_lang": "🌐 简中 / EN",
         "btn_theme_dark": "🌙 Dark Mode",
@@ -195,7 +219,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "stat_rules_unit": "active rules",
         "switches_section_title": "⚡ Automation & Preferences (Instant Toggle)",
         "sw_cruise_title": "⚡ Auto-Sanitize on Copy (Cruise Mode)",
-        "sw_cruise_desc": "Automatically sanitize clipboard within 0.5s whenever you press Ctrl+C — just paste directly into ChatGPT/Claude",
+        "sw_cruise_desc": "Best-effort checks about every 0.55s (1,500,000-character limit); may miss an immediate paste. Sanitize sensitive text manually and review it",
         "sw_semantic_title": "🌐 Semantic IP Disguise Mode (192.0.2.x)",
         "sw_semantic_desc": "Replace real private/public IPs with RFC 5737 test IPs (e.g. 192.0.2.101) so AI tools parse network configs without syntax errors",
         "sw_startup_title": "🚀 Launch at Windows Startup",
@@ -209,7 +233,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "btn_hk_save": "💾 Save & Apply Now",
         "btn_hk_reset": "↺ Reset Default",
         "msg_hk_saved": "✅ Global hotkeys updated & active immediately: Sanitize [{san}] | Restore [{res}]",
-        "msg_hk_err": "❌ Invalid hotkey format or duplicate keys, please try again",
+        "msg_hk_err": "❌ Invalid, duplicate, or unavailable global hotkeys (possibly used by another app); please try again",
+        "msg_hk_rollback_err": "❌ Settings were not saved, but previous hotkeys could not be confirmed restored. Use GUI/tray buttons and reapply your shortcuts.",
         "workflow_title": "💡 3-Second Daily Workflow",
         "workflow_steps": (
             "① Copy code/logs (Ctrl+C)   ➔   "
@@ -287,7 +312,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "notify_clip_empty_res": "ℹ️ Clipboard is empty; nothing to restore",
         "notify_undo_ok": "⏪ Undone: Clipboard restored to original pre-sanitized text ({left} undos left)",
         "notify_undo_empty": "ℹ️ No previous clipboard sanitization to undo",
-        "notify_cruise_on": "⚡ Auto-Sanitize Cruise Mode enabled (Ctrl+C auto-masks)",
+        "notify_cruise_on": "⚡ Best-effort Cruise Mode enabled; review before pasting",
         "notify_cruise_off": "⏹️ Auto-Sanitize Cruise Mode disabled",
         "notify_cruise_hit": "⚡ Cruise {summary}",
         "notify_startup_on": "🚀 Windows Startup auto-launch enabled",
@@ -295,7 +320,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "notify_startup_err": "❌ Failed to update Windows Startup setting",
         "notify_vault_cleared": "🧹 Cleared Session Vault ({count} mappings released)",
         # Tutorial Content
-        "tutorial_body": """🛡️ Welcome to AI Privacy Sanitizer — Quick Start Guide
+        "tutorial_body": """🛡️ Welcome to Sanitizer — Quick Start Guide
 
 1. Do I need to fill in any forms before using it?
    NO! The app works 100% out of the box with zero configuration.
@@ -316,7 +341,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
 
    [Effortless Cruise Mode]
    Turn on "⚡ Auto-Sanitize on Copy" on the Home Dashboard.
-   Whenever you press Ctrl + C, the app automatically sanitizes your clipboard within 0.5 seconds!
+   The app checks about every 0.55 seconds, up to 1,500,000 characters. It cannot guarantee completion before paste; review the result first.
 
 3. When should I use [📚 Custom Words]?
    Only when you want to mask specific proprietary names (like your Company Sdn Bhd, Client names, or internal Project codenames).

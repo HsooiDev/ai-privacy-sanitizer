@@ -5,6 +5,12 @@ config.json
 *.key
 *.pem
 *vault*.json
+# Conventional private exports; arbitrary filenames still require user care.
+*backup*.local.json
+.aps-*.tmp
+
+# Local investigation artifacts
+work/
 
 # Python virtual environment & bytecode
 .venv/
@@ -29,6 +35,7 @@ build/
 !AI-Privacy-Sanitizer.exe
 *.spec
 !AI-Privacy-Sanitizer.spec
+!AI-Privacy-Sanitizer-macOS.spec
 assets/*
 !assets/icon.ico
 

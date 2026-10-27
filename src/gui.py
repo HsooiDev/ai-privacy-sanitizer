@@ -3,22 +3,25 @@
 import ctypes
 import io
 import json
+import math
 from pathlib import Path
 import platform
 import queue
 import re
 import subprocess
 import threading
+import weakref
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
-from src import __version__
+from src import APP_NAME, __version__
 from src.i18n import tr
 from src.rules import BUILTIN_RULES, SAMPLE_TEST_PAYLOAD
-from src.sanitizer import PrivacySanitizer
+from src.sanitizer import HotkeyRollbackError, InputTooLargeError, PrivacySanitizer
 from src.startup import is_startup_enabled, set_startup_enabled
 
 
@@ -42,7 +45,62 @@ def enable_high_dpi_awareness() -> None:
         pass
 
 
+class _StableCTk(ctk.CTk):
+    """Apply the Windows titlebar color without CustomTkinter's withdraw/deiconify cycle."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("fg_color", ("#f1f5f9", "#0b0f19"))
+        super().__init__(*args, **kwargs)
+
+    def _windows_set_titlebar_color(self, color_mode: str) -> None:
+        if platform.system() != "Windows":
+            return
+        try:
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            hwnd = user32.GetParent(self.winfo_id())
+            value = ctypes.c_int(color_mode.lower() == "dark")
+            setter = ctypes.windll.dwmapi.DwmSetWindowAttribute
+            setter.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+            setter.restype = ctypes.c_long
+            if setter(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value)) != 0:
+                setter(hwnd, 19, ctypes.byref(value), ctypes.sizeof(value))
+        except (AttributeError, OSError, tk.TclError):
+            # Older Windows versions can retain the native titlebar; the content still updates.
+            pass
+
+
 CATEGORY_KEYS = ["COMPANY", "CLIENT", "PROJECT", "CUSTOM_SECRET"]
+
+
+class _StableCTkToplevel(ctk.CTkToplevel):
+    _windows_set_titlebar_color = _StableCTk._windows_set_titlebar_color
+
+
+class _PreferenceButton(ctk.CTkButton):
+    """Use release coordinates when child relayout leaves cached hover stale."""
+
+    def _on_release(self, event=None):
+        if event is not None:
+            # CTk's label and canvas have separate Enter/Leave bindings. A text
+            # or theme redraw can invalidate _mouse_inside between clicks, and
+            # the click animation also clears it for 100ms. Neither is a reason
+            # to discard an actual release inside this control.
+            try:
+                x = event.widget.winfo_rootx() + event.x - self.winfo_rootx()
+                y = event.widget.winfo_rooty() + event.y - self.winfo_rooty()
+                inside = 0 <= x < self.winfo_width() and 0 <= y < self.winfo_height()
+            except (AttributeError, tk.TclError):
+                return
+            if not inside:
+                self._on_leave()
+                return
+            self._mouse_inside = True
+        return super()._on_release(event)
+
 
 CATEGORY_BADGE_COLORS: Dict[str, tuple] = {
     "COMPANY": ("#dbeafe", "#1e3a8a"),
@@ -64,8 +122,9 @@ class GuiController:
         on_undo_sanitize: Optional[Callable[[], None]] = None,
         on_open_raw_config: Optional[Callable[[], None]] = None,
         on_exit_app: Optional[Callable[[], None]] = None,
-        on_reload_hotkeys: Optional[Callable[[], bool]] = None,
+        on_reload_hotkeys: Optional[Callable[[Optional[Dict[str, str]]], bool]] = None,
         on_language_changed: Optional[Callable[[], None]] = None,
+        on_clear_session: Optional[Callable[[], None]] = None,
     ) -> None:
         self.sanitizer = sanitizer
         self.icon_factory = icon_factory
@@ -76,6 +135,8 @@ class GuiController:
         self.on_exit_app = on_exit_app
         self.on_reload_hotkeys = on_reload_hotkeys
         self.on_language_changed = on_language_changed
+        self.on_clear_session = on_clear_session
+        self.startup_status: Optional[str] = None
         self._cmd_queue: "queue.Queue[str]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
@@ -100,14 +161,16 @@ class GuiController:
         """Request the CustomTkinter loop to terminate cleanly."""
         self._cmd_queue.put("QUIT")
 
-    def run_main_loop(self, show_on_start: bool = True) -> None:
+    def run_main_loop(
+        self, show_on_start: bool = True, before_mainloop: Optional[Callable[[], None]] = None
+    ) -> None:
         """Run CustomTkinter on the main thread (recommended for Windows DWM & OLE dialogs)."""
         enable_high_dpi_awareness()
         ctk.set_default_color_theme("blue")
         initial_theme = "Light" if self.sanitizer.theme == "light" else "Dark"
         ctk.set_appearance_mode(initial_theme)
 
-        root = ctk.CTk()
+        root = _StableCTk()
         if not show_on_start:
             root.withdraw()
 
@@ -121,7 +184,10 @@ class GuiController:
             on_exit_app=self.on_exit_app,
             on_reload_hotkeys=self.on_reload_hotkeys,
             on_language_changed=self.on_language_changed,
+            on_clear_session=self.on_clear_session,
         )
+        if self.startup_status:
+            app_win.status_var.set(self.startup_status)
         if show_on_start:
             root.after(80, app_win.present)
 
@@ -146,6 +212,8 @@ class GuiController:
                 pass
             root.after(120, _poll_commands)
 
+        if before_mainloop is not None:
+            before_mainloop()
         root.after(120, _poll_commands)
         root.mainloop()
 
@@ -162,8 +230,9 @@ class _ModernControlCenter:
         on_restore_clipboard: Optional[Callable[[], None]] = None,
         on_undo_sanitize: Optional[Callable[[], None]] = None,
         on_exit_app: Optional[Callable[[], None]] = None,
-        on_reload_hotkeys: Optional[Callable[[], bool]] = None,
+        on_reload_hotkeys: Optional[Callable[[Optional[Dict[str, str]]], bool]] = None,
         on_language_changed: Optional[Callable[[], None]] = None,
+        on_clear_session: Optional[Callable[[], None]] = None,
     ) -> None:
         self.root = root
         self.sanitizer = sanitizer
@@ -173,8 +242,10 @@ class _ModernControlCenter:
         self.on_exit_app = on_exit_app
         self.on_reload_hotkeys = on_reload_hotkeys
         self.on_language_changed = on_language_changed
+        self.on_clear_session = on_clear_session
         self._tk_icon = None
         self._json_modal: Optional[ctk.CTkToplevel] = None
+        self._about_modal: Optional[ctk.CTkToplevel] = None
         self._active_page_key: str = "home"
         self._dict_submode: str = "words"
         self._reveal_vault_originals: bool = False
@@ -192,11 +263,13 @@ class _ModernControlCenter:
         self._saved_vault_search: str = ""
         self._saved_hk_sanitize: Optional[str] = None
         self._saved_hk_restore: Optional[str] = None
+        self._translation_bindings = weakref.WeakKeyDictionary()
+        self._sandbox_status_texts = {}
 
         self.lang = self.sanitizer.language
         self.theme_mode = self.sanitizer.theme
 
-        self.root.title(f"{tr(self.lang, 'window_title')} v{__version__}")
+        self.root.title(self._t("window_title"))
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
         if icon_factory is not None:
@@ -216,6 +289,8 @@ class _ModernControlCenter:
         pos_y = max(20, (screen_h - height) // 2)
         self.root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
         self.root.minsize(860, 600)
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
 
         self.font_title = ctk.CTkFont(family="Microsoft YaHei UI", size=20, weight="bold")
         self.font_h2 = ctk.CTkFont(family="Microsoft YaHei UI", size=15, weight="bold")
@@ -229,7 +304,103 @@ class _ModernControlCenter:
         self._build_layout()
 
     def _t(self, key: str) -> str:
+        if platform.system() == "Darwin" and key in ("status_ready", "hotkey_section_desc"):
+            key = "macos_preview_hotkeys"
         return tr(self.lang, key)
+
+    def _localized_widget(self, widget_type, master, *, translation_key: str,
+                          translation_option: str = "text", translation_prefix: str = "", **kwargs):
+        """Register the translation key, without replacing the widget when language changes."""
+        if widget_type is ctk.CTkLabel:
+            kwargs.setdefault("anchor", "w")
+        kwargs[translation_option] = translation_prefix + self._t(translation_key)
+        widget = widget_type(master, **kwargs)
+        if translation_option == "text":
+            self._reserve_bilingual_text(widget, [translation_prefix + self._format_hotkey_text(tr(lang, translation_key))
+                                                   for lang in ("zh", "en")])
+        self._translation_bindings[widget] = (translation_key, translation_option, translation_prefix)
+        return widget
+
+    @staticmethod
+    def _reserve_bilingual_text(widget, variants) -> None:
+        """Give native labels constant text dimensions before they are mapped."""
+        label = getattr(widget, "_label", getattr(widget, "_text_label", None))
+        if label is None:
+            return
+        font = tkfont.Font(root=widget, font=label.cget("font"))
+        # An unmapped probe uses Tk's own wrapping/font metrics. It never
+        # becomes a visible widget and does not process the event/idle queue.
+        probe = tk.Label(widget, font=label.cget("font"), wraplength=label.cget("wraplength"),
+                         padx=0, pady=0, borderwidth=0)
+        try:
+            sizes = []
+            for text in variants:
+                probe.configure(text=text)
+                sizes.append((probe.winfo_reqwidth(), probe.winfo_reqheight()))
+            label.configure(width=math.ceil(max(width for width, height in sizes) / max(1, font.measure("0"))),
+                            height=math.ceil(max(height for width, height in sizes) / max(1, font.metrics("linespace"))))
+        finally:
+            probe.destroy()
+
+    def _ready_status_text(self) -> str:
+        return self._format_hotkey_text(self._t("status_ready"))
+
+    def _format_hotkey_text(self, text: str) -> str:
+        hotkeys = self.sanitizer.hotkeys
+        for key, action in (("S", "sanitize"), ("R", "restore")):
+            text = re.sub(r"Alt\s*\+\s*" + key + r"\b", lambda _: hotkeys[action].upper(), text, flags=re.I)
+        return text
+
+    def _guide_text(self) -> str:
+        return self._format_hotkey_text(self._t("tutorial_body").strip())
+
+    @staticmethod
+    def _relabel_segments(bar, values, selected) -> None:
+        """Translate fixed segments without creating unpainted native labels."""
+        old_values = bar.cget("values")
+        if len(old_values) != len(values) or len(set(values)) != len(values):
+            raise ValueError("Translated segments must retain their unique positions")
+        # CTk's public configure(values=...) destroys every button. These two
+        # fixed, unbound bars only need labels, lookup keys and click targets
+        # updated; retain their native windows, colors, geometry and timers.
+        buttons = [bar._buttons_dict[value] for value in old_values]
+        renamed = dict(zip(old_values, values))
+        bar._value_list = list(values)
+        bar._buttons_dict = dict(zip(values, buttons))
+        bar._current_value = renamed.get(bar.get(), bar.get())
+        for value, button in zip(values, buttons):
+            button.configure(text=value, command=lambda value=value: bar.set(value, from_button_callback=True))
+        bar.set(selected)
+
+    def _refresh_translations(self, add_category: str, filter_category: str) -> None:
+        for widget, (key, option, prefix) in list(self._translation_bindings.items()):
+            if widget.winfo_exists():
+                widget.configure(**{option: prefix + self._t(key)})
+            else:
+                del self._translation_bindings[widget]
+        self.root.title(self._t("window_title"))
+        self._nav_labels = [self._t("nav_" + key) for key in self._nav_keys]
+        self._label_to_nav_key = dict(zip(self._nav_labels, self._nav_keys))
+        self._nav_key_to_label = dict(zip(self._nav_keys, self._nav_labels))
+        self._relabel_segments(self.nav_bar, self._nav_labels, self._nav_key_to_label[self._active_page_key])
+        self._dict_mode_labels = [self._t("dict_mode_words"), self._t("dict_mode_rules")]
+        self._relabel_segments(self.dict_mode_seg, self._dict_mode_labels,
+                               self._dict_mode_labels[self._dict_submode == "rules"])
+        self.add_cat_combo.configure(values=[self._cat_label(key) for key in CATEGORY_KEYS])
+        self.add_cat_combo.set(self._cat_label(add_category))
+        self.filter_cat_combo.configure(values=[self._cat_label(key) for key in ["ALL"] + CATEGORY_KEYS])
+        self.filter_cat_combo.set(self._cat_label(filter_category))
+        self.btn_theme.configure(text=self._t(
+            "btn_theme_light" if self.theme_mode == "dark" else "btn_theme_dark"))
+        self._refresh_hotkey_labels()
+        if self._recording_target:
+            target = self.btn_rec_san if self._recording_target == "sanitize" else self.btn_rec_res
+            target.configure(text=self._t("btn_hk_recording"))
+        if self._json_modal is not None and self._json_modal.winfo_exists():
+            self._json_modal.title(self._t("json_modal_title"))
+        if self._about_modal is not None and self._about_modal.winfo_exists():
+            self._about_modal.title(self._t("about_title"))
+            self._about_version_label.configure(text=self._t("about_version").format(version=__version__))
 
     def _cat_label(self, cat_key: str) -> str:
         mapping = {
@@ -342,6 +513,10 @@ class _ModernControlCenter:
 
         def _popup(event) -> None:
             try:
+                labels = (["✂️ 剪切 (Cut)", "📋 复制 (Copy)", "📥 粘贴 (Paste)", "🔠 全选 (Select All)"]
+                          if self.lang == "zh" else ["✂️ Cut", "📋 Copy", "📥 Paste", "🔠 Select All"])
+                for index, label in zip((0, 1, 2, 4), labels):
+                    menu.entryconfigure(index, label=label)
                 inner.focus_set()
                 menu.tk_popup(event.x_root, event.y_root)
             finally:
@@ -349,7 +524,51 @@ class _ModernControlCenter:
 
         inner.bind("<Button-3>", _popup)
 
-    def _build_layout(self) -> None:
+    def _cancel_layout_timers(self, container) -> None:
+        """Cancel only callbacks owned by this widget subtree."""
+        if isinstance(container, tk.Misc):
+            commands = set()
+            pending = [container]
+            while pending:
+                widget = pending.pop()
+                commands.update(getattr(widget, "_tclCommands", None) or ())
+                pending.extend(widget.winfo_children())
+            for timer in self.root.tk.splitlist(self.root.tk.call("after", "info")):
+                script, _kind = self.root.tk.call("after", "info", timer)
+                parts = self.root.tk.splitlist(script)
+                if parts and str(parts[0]) in commands:
+                    # Leave Tcl command deletion to the owning widget's destroy().
+                    self.root.tk.call("after", "cancel", timer)
+
+    def _discard_layout(self, container) -> None:
+        self._cancel_layout_timers(container)
+        container.destroy()
+
+    def _build_layout(self, on_ready: Optional[Callable[[], None]] = None) -> None:
+        """Lay out the replacement behind the mapped old page, then raise it."""
+        previous = self.__dict__.copy()
+        old_container = self._main_container
+        try:
+            self._construct_layout()
+            # Both containers occupy the same grid cell. Keep the old page
+            # mapped and above the replacement while real Tk geometry settles.
+            self._main_container.grid(row=0, column=0, sticky="nsew")
+            if old_container is not None:
+                self._main_container.lower(old_container)
+            self.root.update_idletasks()
+            if on_ready is not None:
+                on_ready()
+            self._main_container.lift()
+        except Exception:
+            if self._main_container is not None and self._main_container is not old_container:
+                self._discard_layout(self._main_container)
+            self.__dict__.clear()
+            self.__dict__.update(previous)
+            raise
+        if old_container is not None:
+            self._discard_layout(old_container)
+
+    def _construct_layout(self) -> None:
         if getattr(self, "_sandbox_debounce_id", None) is not None:
             try:
                 self.root.after_cancel(self._sandbox_debounce_id)
@@ -362,17 +581,14 @@ class _ModernControlCenter:
                 self.root.unbind("<KeyPress>")
             except Exception:
                 pass
-        if self._main_container is not None:
-            self._main_container.destroy()
-
-        self.root.title(f"{self._t('window_title')} v{__version__}")
-        self.status_var = tk.StringVar(value=f"{self._t('status_ready')} · v{__version__}")
+        self.root.title(self._t("window_title"))
+        self.status_var = tk.StringVar(value=self._ready_status_text())
         self._main_container = ctk.CTkFrame(
             self.root,
             fg_color=("#f1f5f9", "#0b0f19"),
             corner_radius=0,
         )
-        self._main_container.pack(fill="both", expand=True)
+        # Keep the previous container mapped until construction is complete.
 
         # --- 1. Top App Bar ---
         header = ctk.CTkFrame(
@@ -391,14 +607,14 @@ class _ModernControlCenter:
 
         ctk.CTkLabel(
             brand_box,
-            text=f"🛡️ {self._t('brand_title')} v{__version__}",
+            text=self._t("brand_title"),
             font=self.font_title,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w")
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             brand_box,
-            text=self._t("brand_subtitle"),
+            translation_key='brand_subtitle',
             font=self.font_small,
             text_color=("#64748b", "#94a3b8"),
         ).pack(anchor="w")
@@ -412,7 +628,7 @@ class _ModernControlCenter:
             if self.theme_mode == "dark"
             else self._t("btn_theme_dark")
         )
-        self.btn_theme = ctk.CTkButton(
+        self.btn_theme = _PreferenceButton(
             controls_box,
             text=theme_btn_text,
             font=self.font_body,
@@ -426,9 +642,9 @@ class _ModernControlCenter:
         )
         self.btn_theme.pack(side="right", padx=(8, 0))
 
-        ctk.CTkButton(
+        self._localized_widget(_PreferenceButton,
             controls_box,
-            text=self._t("btn_lang"),
+            translation_key='btn_lang',
             font=self.font_body,
             width=105,
             height=34,
@@ -438,6 +654,19 @@ class _ModernControlCenter:
             text_color=("#0f172a", "#f8fafc"),
             command=self._toggle_language,
         ).pack(side="right")
+
+        self._localized_widget(ctk.CTkButton,
+            controls_box,
+            translation_key="btn_about",
+            font=self.font_body,
+            width=66,
+            height=34,
+            corner_radius=8,
+            fg_color=("#e2e8f0", "#1e293b"),
+            hover_color=("#cbd5e1", "#334155"),
+            text_color=("#0f172a", "#f8fafc"),
+            command=self._show_about,
+        ).pack(side="right", padx=(0, 8))
 
         # --- 2. Navigation Bar (Segmented Pill Selector) ---
         nav_frame = ctk.CTkFrame(self._main_container, fg_color="transparent")
@@ -499,9 +728,9 @@ class _ModernControlCenter:
             text_color=("#0284c7", "#38bdf8"),
         ).pack(side="left", padx=22, pady=8)
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             footer,
-            text=self._t("btn_exit_app"),
+            translation_key='btn_exit_app',
             font=self.font_small,
             width=125,
             height=30,
@@ -512,9 +741,9 @@ class _ModernControlCenter:
             command=self._trigger_exit_app,
         ).pack(side="right", padx=(8, 22), pady=8)
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             footer,
-            text=self._t("btn_hide_tray"),
+            translation_key='btn_hide_tray',
             font=self.font_small,
             width=120,
             height=30,
@@ -549,16 +778,16 @@ class _ModernControlCenter:
         )
         hero.pack(fill="x", pady=(2, 12))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             hero,
-            text=self._t("hero_badge"),
+            translation_key='hero_badge',
             font=self.font_h2,
             text_color=("#059669", "#34d399"),
         ).pack(anchor="w", padx=20, pady=(16, 6))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             hero,
-            text=self._t("hero_desc"),
+            translation_key='hero_desc',
             font=self.font_body,
             text_color=("#334155", "#cbd5e1"),
             justify="left",
@@ -597,9 +826,9 @@ class _ModernControlCenter:
         )
         self.btn_hero_res.pack(side="left", fill="x", expand=True, padx=(8, 8))
 
-        self.btn_hero_undo = ctk.CTkButton(
+        self.btn_hero_undo = self._localized_widget(ctk.CTkButton,
             btn_row,
-            text=self._t("btn_hero_undo"),
+            translation_key='btn_hero_undo',
             font=self.font_h3,
             width=155,
             height=44,
@@ -619,25 +848,25 @@ class _ModernControlCenter:
         self.lbl_stat_hits = self._create_stat_card(
             stats_row,
             col=0,
-            title=self._t("stat_intercepted_title"),
+            title="stat_intercepted_title",
             value=str(self.sanitizer.vault.total_intercepted_hits),
-            unit=self._t("stat_intercepted_unit"),
+            unit="stat_intercepted_unit",
             accent=("#059669", "#34d399"),
         )
         self.lbl_stat_vault = self._create_stat_card(
             stats_row,
             col=1,
-            title=self._t("stat_vault_title"),
+            title="stat_vault_title",
             value=str(self.sanitizer.vault.size),
-            unit=self._t("stat_vault_unit"),
+            unit="stat_vault_unit",
             accent=("#2563eb", "#60a5fa"),
         )
         self._create_stat_card(
             stats_row,
             col=2,
-            title=self._t("stat_rules_title"),
+            title="stat_rules_title",
             value=str(len(BUILTIN_RULES)),
-            unit=self._t("stat_rules_unit"),
+            unit="stat_rules_unit",
             accent=("#7c3aed", "#a78bfa"),
         )
 
@@ -651,9 +880,9 @@ class _ModernControlCenter:
         )
         sw_card.pack(fill="x", pady=(0, 12))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             sw_card,
-            text=self._t("switches_section_title"),
+            translation_key='switches_section_title',
             font=self.font_h3,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=18, pady=(14, 6))
@@ -664,22 +893,22 @@ class _ModernControlCenter:
 
         self._create_switch_row(
             sw_card,
-            title=self._t("sw_cruise_title"),
-            desc=self._t("sw_cruise_desc"),
+            title="sw_cruise_title",
+            desc="sw_cruise_desc",
             variable=self.var_auto_sanitize,
             command=self._on_toggle_auto_sanitize,
         )
         self._create_switch_row(
             sw_card,
-            title=self._t("sw_semantic_title"),
-            desc=self._t("sw_semantic_desc"),
+            title="sw_semantic_title",
+            desc="sw_semantic_desc",
             variable=self.var_semantic_ip,
             command=self._on_toggle_semantic_ip,
         )
         self._create_switch_row(
             sw_card,
-            title=self._t("sw_startup_title"),
-            desc=self._t("sw_startup_desc"),
+            title="sw_startup_title",
+            desc="sw_startup_desc",
             variable=self.var_startup,
             command=self._on_toggle_startup,
         )
@@ -694,16 +923,16 @@ class _ModernControlCenter:
         )
         hk_card.pack(fill="x", pady=(0, 12))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             hk_card,
-            text=self._t("hotkey_section_title"),
+            translation_key='hotkey_section_title',
             font=self.font_h3,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=18, pady=(12, 2))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             hk_card,
-            text=self._t("hotkey_section_desc"),
+            translation_key='hotkey_section_desc',
             font=self.font_small,
             text_color=("#64748b", "#94a3b8"),
         ).pack(anchor="w", padx=18, pady=(0, 8))
@@ -711,9 +940,9 @@ class _ModernControlCenter:
         hk_row = ctk.CTkFrame(hk_card, fg_color="transparent")
         hk_row.pack(fill="x", padx=18, pady=(0, 12))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             hk_row,
-            text=self._t("lbl_hk_sanitize"),
+            translation_key='lbl_hk_sanitize',
             font=self.font_body,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(side="left")
@@ -728,9 +957,9 @@ class _ModernControlCenter:
         self.combo_hk_sanitize.set(self._saved_hk_sanitize or hk.get("sanitize", "alt+s"))
         self.combo_hk_sanitize.pack(side="left", padx=(4, 6))
 
-        self.btn_rec_san = ctk.CTkButton(
+        self.btn_rec_san = self._localized_widget(ctk.CTkButton,
             hk_row,
-            text=self._t("btn_hk_record"),
+            translation_key='btn_hk_record',
             font=self.font_small,
             width=92,
             height=32,
@@ -742,9 +971,9 @@ class _ModernControlCenter:
         )
         self.btn_rec_san.pack(side="left", padx=(0, 16))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             hk_row,
-            text=self._t("lbl_hk_restore"),
+            translation_key='lbl_hk_restore',
             font=self.font_body,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(side="left")
@@ -759,9 +988,9 @@ class _ModernControlCenter:
         self.combo_hk_restore.set(self._saved_hk_restore or hk.get("restore", "alt+r"))
         self.combo_hk_restore.pack(side="left", padx=(4, 6))
 
-        self.btn_rec_res = ctk.CTkButton(
+        self.btn_rec_res = self._localized_widget(ctk.CTkButton,
             hk_row,
-            text=self._t("btn_hk_record"),
+            translation_key='btn_hk_record',
             font=self.font_small,
             width=92,
             height=32,
@@ -773,9 +1002,9 @@ class _ModernControlCenter:
         )
         self.btn_rec_res.pack(side="left", padx=(0, 12))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             hk_row,
-            text=self._t("btn_hk_save"),
+            translation_key='btn_hk_save',
             font=self.font_small,
             width=118,
             height=32,
@@ -786,9 +1015,9 @@ class _ModernControlCenter:
             command=self._save_and_apply_hotkeys,
         ).pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             hk_row,
-            text=self._t("btn_hk_reset"),
+            translation_key='btn_hk_reset',
             font=self.font_small,
             width=80,
             height=32,
@@ -820,6 +1049,8 @@ class _ModernControlCenter:
             font=self.font_body,
             text_color=("#0369a1", "#7dd3fc"),
         )
+        self._reserve_bilingual_text(self.lbl_workflow, [self._format_hotkey_text(
+            f"{tr(lang, 'workflow_title')}：{tr(lang, 'workflow_steps')}") for lang in ("zh", "en")])
         self.lbl_workflow.pack(padx=16, pady=10)
 
     def _create_stat_card(
@@ -841,9 +1072,9 @@ class _ModernControlCenter:
         )
         card.grid(row=0, column=col, sticky="ew", padx=padx)
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             card,
-            text=title,
+            translation_key=title,
             font=self.font_small,
             text_color=("#64748b", "#94a3b8"),
         ).pack(anchor="w", padx=16, pady=(10, 2))
@@ -859,9 +1090,9 @@ class _ModernControlCenter:
         )
         num_lbl.pack(side="left")
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             val_row,
-            text=f"  {unit}",
+            translation_key=unit, translation_prefix="  ",
             font=self.font_small,
             text_color=("#64748b", "#94a3b8"),
         ).pack(side="left", pady=(6, 0))
@@ -882,17 +1113,19 @@ class _ModernControlCenter:
         txt_box = ctk.CTkFrame(row, fg_color="transparent")
         txt_box.pack(side="left", fill="x", expand=True)
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             txt_box,
-            text=title,
+            translation_key=title,
             font=self.font_body,
+            anchor="w",
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w")
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             txt_box,
-            text=desc,
+            translation_key=desc,
             font=self.font_small,
+            anchor="w",
             text_color=("#64748b", "#94a3b8"),
         ).pack(anchor="w")
 
@@ -925,9 +1158,9 @@ class _ModernControlCenter:
         tb_inner = ctk.CTkFrame(toolbar, fg_color="transparent")
         tb_inner.pack(fill="x", padx=12, pady=8)
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tb_inner,
-            text=self._t("btn_load_sample"),
+            translation_key='btn_load_sample',
             font=self.font_body,
             height=34,
             corner_radius=8,
@@ -936,9 +1169,9 @@ class _ModernControlCenter:
             command=self._load_sample_into_sandbox,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tb_inner,
-            text=self._t("btn_run_sanitize"),
+            translation_key='btn_run_sanitize',
             font=self.font_h3,
             height=34,
             corner_radius=8,
@@ -947,9 +1180,9 @@ class _ModernControlCenter:
             command=self._run_sandbox_sanitize,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tb_inner,
-            text=self._t("btn_run_restore"),
+            translation_key='btn_run_restore',
             font=self.font_body,
             height=34,
             corner_radius=8,
@@ -958,9 +1191,9 @@ class _ModernControlCenter:
             command=self._run_sandbox_restore,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tb_inner,
-            text=self._t("btn_copy_output"),
+            translation_key='btn_copy_output',
             font=self.font_body,
             height=34,
             corner_radius=8,
@@ -969,9 +1202,9 @@ class _ModernControlCenter:
             command=self._copy_sandbox_output,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tb_inner,
-            text=self._t("btn_clear_sandbox"),
+            translation_key='btn_clear_sandbox',
             font=self.font_body,
             width=80,
             height=34,
@@ -995,9 +1228,9 @@ class _ModernControlCenter:
         self.sandbox_cat_inner = ctk.CTkFrame(self.sandbox_cat_bar, fg_color="transparent")
         self.sandbox_cat_inner.pack(fill="x", padx=12, pady=5)
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             self.sandbox_cat_inner,
-            text=self._t("sandbox_cat_empty"),
+            translation_key='sandbox_cat_empty',
             font=self.font_small,
             text_color=("#64748b", "#94a3b8"),
         ).pack(side="left")
@@ -1016,9 +1249,9 @@ class _ModernControlCenter:
         )
         left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             left_card,
-            text=self._t("sandbox_left_title"),
+            translation_key='sandbox_left_title',
             font=self.font_h3,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=12, pady=(8, 4))
@@ -1047,9 +1280,9 @@ class _ModernControlCenter:
         )
         right_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             right_card,
-            text=self._t("sandbox_right_title"),
+            translation_key='sandbox_right_title',
             font=self.font_h3,
             text_color=("#059669", "#34d399"),
         ).pack(anchor="w", padx=12, pady=(8, 4))
@@ -1127,16 +1360,16 @@ class _ModernControlCenter:
         )
         banner.pack(fill="x", pady=(2, 8))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             banner,
-            text=self._t("dict_banner_title"),
+            translation_key='dict_banner_title',
             font=self.font_h3,
             text_color=("#1d4ed8", "#93c5fd"),
         ).pack(anchor="w", padx=14, pady=(8, 2))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             banner,
-            text=self._t("dict_banner_desc"),
+            translation_key='dict_banner_desc',
             font=self.font_small,
             text_color=("#1e40af", "#bfdbfe"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
@@ -1153,9 +1386,9 @@ class _ModernControlCenter:
         add_row = ctk.CTkFrame(add_card, fg_color="transparent")
         add_row.pack(fill="x", padx=12, pady=10)
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             add_row,
-            text=self._t("lbl_add_cat"),
+            translation_key='lbl_add_cat',
             font=self.font_body,
         ).pack(side="left")
 
@@ -1174,9 +1407,9 @@ class _ModernControlCenter:
         )
         self.add_cat_combo.pack(side="left", padx=(6, 10))
 
-        self.entry_new_word = ctk.CTkEntry(
+        self.entry_new_word = self._localized_widget(ctk.CTkEntry,
             add_row,
-            placeholder_text=self._t("placeholder_add_word"),
+            translation_key='placeholder_add_word', translation_option='placeholder_text',
             font=self.font_body,
             height=34,
         )
@@ -1186,9 +1419,9 @@ class _ModernControlCenter:
             self.entry_new_word.insert(0, self._saved_entry_new_word)
         self._attach_text_context_menu(self.entry_new_word, is_textbox=False)
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             add_row,
-            text=self._t("btn_add_word"),
+            translation_key='btn_add_word',
             font=self.font_h3,
             width=110,
             height=34,
@@ -1201,9 +1434,9 @@ class _ModernControlCenter:
         tools_row = ctk.CTkFrame(self.dict_words_pane, fg_color="transparent")
         tools_row.pack(fill="x", pady=(0, 6))
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             tools_row,
-            text=self._t("lbl_filter_cat"),
+            translation_key='lbl_filter_cat',
             font=self.font_body,
         ).pack(side="left")
 
@@ -1223,9 +1456,9 @@ class _ModernControlCenter:
         )
         self.filter_cat_combo.pack(side="left", padx=(6, 10))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tools_row,
-            text=self._t("btn_clear_all_dict"),
+            translation_key='btn_clear_all_dict',
             font=self.font_small,
             height=30,
             corner_radius=8,
@@ -1234,9 +1467,9 @@ class _ModernControlCenter:
             command=self._clear_all_custom_words,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tools_row,
-            text=self._t("btn_export"),
+            translation_key='btn_export',
             font=self.font_small,
             width=80,
             height=30,
@@ -1246,9 +1479,9 @@ class _ModernControlCenter:
             command=self._export_dictionary,
         ).pack(side="right", padx=(6, 0))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tools_row,
-            text=self._t("btn_import"),
+            translation_key='btn_import',
             font=self.font_small,
             width=80,
             height=30,
@@ -1258,9 +1491,9 @@ class _ModernControlCenter:
             command=self._import_dictionary,
         ).pack(side="right", padx=(6, 0))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             tools_row,
-            text=self._t("btn_json_editor"),
+            translation_key='btn_json_editor',
             font=self.font_small,
             height=30,
             corner_radius=8,
@@ -1292,9 +1525,9 @@ class _ModernControlCenter:
         )
         allow_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=2)
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             allow_card,
-            text=self._t("allowlist_title"),
+            translation_key='allowlist_title',
             font=self.font_h3,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=12, pady=(10, 6))
@@ -1302,9 +1535,9 @@ class _ModernControlCenter:
         allow_in_row = ctk.CTkFrame(allow_card, fg_color="transparent")
         allow_in_row.pack(fill="x", padx=12, pady=(0, 8))
 
-        self.entry_allowlist = ctk.CTkEntry(
+        self.entry_allowlist = self._localized_widget(ctk.CTkEntry,
             allow_in_row,
-            placeholder_text=self._t("placeholder_allowlist"),
+            translation_key='placeholder_allowlist', translation_option='placeholder_text',
             font=self.font_body,
             height=32,
         )
@@ -1314,9 +1547,9 @@ class _ModernControlCenter:
             self.entry_allowlist.insert(0, self._saved_entry_allowlist)
         self._attach_text_context_menu(self.entry_allowlist, is_textbox=False)
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             allow_in_row,
-            text=self._t("btn_add_allowlist"),
+            translation_key='btn_add_allowlist',
             font=self.font_small,
             width=110,
             height=32,
@@ -1342,9 +1575,9 @@ class _ModernControlCenter:
         )
         rules_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             rules_card,
-            text=self._t("rules_toggle_title"),
+            translation_key='rules_toggle_title',
             font=self.font_h3,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=12, pady=(10, 6))
@@ -1384,10 +1617,10 @@ class _ModernControlCenter:
 
         self.vault_search_var = tk.StringVar(value=self._saved_vault_search)
         self.vault_search_var.trace_add("write", lambda *_a: self.refresh_vault_list())
-        self.entry_vault_search = ctk.CTkEntry(
+        self.entry_vault_search = self._localized_widget(ctk.CTkEntry,
             bar_inner,
             textvariable=self.vault_search_var,
-            placeholder_text=self._t("placeholder_search_vault"),
+            translation_key='placeholder_search_vault', translation_option='placeholder_text',
             font=self.font_body,
             width=220,
             height=32,
@@ -1396,9 +1629,9 @@ class _ModernControlCenter:
         self._attach_text_context_menu(self.entry_vault_search, is_textbox=False)
 
         self.var_reveal_vault = tk.BooleanVar(value=self._reveal_vault_originals)
-        ctk.CTkSwitch(
+        self._localized_widget(ctk.CTkSwitch,
             bar_inner,
-            text=self._t("sw_reveal_vault"),
+            translation_key='sw_reveal_vault',
             font=self.font_small,
             variable=self.var_reveal_vault,
             onvalue=True,
@@ -1407,9 +1640,9 @@ class _ModernControlCenter:
             command=self._on_toggle_reveal_vault,
         ).pack(side="left", padx=(0, 10))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             bar_inner,
-            text=self._t("btn_clear_vault"),
+            translation_key='btn_clear_vault',
             font=self.font_small,
             height=32,
             corner_radius=8,
@@ -1418,9 +1651,9 @@ class _ModernControlCenter:
             command=self._clear_vault_from_gui,
         ).pack(side="right", padx=(6, 0))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             bar_inner,
-            text=self._t("btn_refresh_vault"),
+            translation_key='btn_refresh_vault',
             font=self.font_small,
             width=90,
             height=32,
@@ -1454,18 +1687,37 @@ class _ModernControlCenter:
         )
         guide_card.pack(fill="both", expand=True, pady=2)
 
-        guide_box = ctk.CTkTextbox(
+        self.guide_box = ctk.CTkTextbox(
             guide_card,
             font=self.font_body,
             fg_color="transparent",
             text_color=("#0f172a", "#e2e8f0"),
             wrap="word",
         )
-        guide_box.pack(fill="both", expand=True, padx=16, pady=12)
-        guide_box.insert("1.0", self._t("tutorial_body").strip())
-        guide_box.configure(state="disabled")
+        self.guide_box.pack(fill="both", expand=True, padx=16, pady=12)
+        self.guide_box.insert("1.0", self._guide_text())
+        self.guide_box.configure(state="disabled")
 
     # ---------------- In-App JSON Editor Modal ----------------
+
+    def _show_about(self) -> None:
+        if self._about_modal is not None and self._about_modal.winfo_exists():
+            self._about_modal.lift()
+            return
+        modal = _StableCTkToplevel(self.root, fg_color=("#f1f5f9", "#0b0f19"))
+        self._about_modal = modal
+        modal.title(self._t("about_title"))
+        modal.transient(self.root)
+        modal.geometry(f"400x240+{self.root.winfo_x() + 120}+{self.root.winfo_y() + 100}")
+        modal.resizable(False, False)
+        ctk.CTkLabel(modal, text=APP_NAME, font=self.font_title).pack(pady=(24, 4))
+        self._about_version_label = ctk.CTkLabel(
+            modal, text=self._t("about_version").format(version=__version__), font=self.font_body)
+        self._about_version_label.pack(pady=(0, 12))
+        self._localized_widget(ctk.CTkLabel, modal, translation_key="about_description", anchor="center",
+                               font=self.font_body, wraplength=350).pack(padx=24, pady=(0, 16))
+        self._localized_widget(ctk.CTkButton, modal, translation_key="btn_close",
+                               width=100, height=32, command=modal.destroy).pack(pady=(0, 20))
 
     def open_in_app_json_modal(self) -> None:
         """Open a sleek built-in JSON editor modal window inside the app (never external IDE)."""
@@ -1482,9 +1734,9 @@ class _ModernControlCenter:
         modal.lift()
         modal.focus_force()
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             modal,
-            text=self._t("json_modal_hint"),
+            translation_key='json_modal_hint',
             font=self.font_body,
         ).pack(anchor="w", padx=18, pady=(14, 6))
 
@@ -1522,7 +1774,7 @@ class _ModernControlCenter:
             except Exception as exc:
                 messagebox.showerror(
                     "JSON Error",
-                    f"{self._t('msg_json_err')}{exc}",
+                    self._t("msg_operation_failed"),
                     parent=modal,
                 )
 
@@ -1530,9 +1782,9 @@ class _ModernControlCenter:
             if platform.system() == "Windows":
                 subprocess.Popen(["explorer", f"/select,{cfg_path}"])
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             btn_bar,
-            text=self._t("btn_save_json"),
+            translation_key='btn_save_json',
             font=self.font_h3,
             height=36,
             corner_radius=8,
@@ -1541,9 +1793,9 @@ class _ModernControlCenter:
             command=_save_json,
         ).pack(side="left", padx=(0, 10))
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             btn_bar,
-            text=self._t("btn_open_folder"),
+            translation_key='btn_open_folder',
             font=self.font_body,
             height=36,
             corner_radius=8,
@@ -1552,9 +1804,9 @@ class _ModernControlCenter:
             command=_reveal_in_explorer,
         ).pack(side="left")
 
-        ctk.CTkButton(
+        self._localized_widget(ctk.CTkButton,
             btn_bar,
-            text=self._t("btn_close"),
+            translation_key='btn_close',
             font=self.font_body,
             width=90,
             height=36,
@@ -1578,17 +1830,40 @@ class _ModernControlCenter:
         self.refresh_all()
 
     def _toggle_language(self) -> None:
-        self._snapshot_ui_state()
+        previous_lang = self.lang
+        add_category = self._label_to_cat(self.add_cat_combo.get()) if hasattr(self, "add_cat_combo") else "COMPANY"
+        filter_category = self._label_to_cat(self.filter_cat_combo.get()) if hasattr(self, "filter_cat_combo") else "ALL"
+        previous_status = self.status_var.get()
+        was_ready = previous_status == self._ready_status_text()
+        sandbox_status = getattr(self, "_sandbox_status_texts", {})
+        was_sandbox_status = previous_status == sandbox_status.get(previous_lang)
         self.lang = "en" if self.lang == "zh" else "zh"
-        self.sanitizer.set_language(self.lang)
+        try:
+            self._refresh_translations(add_category, filter_category)
+            self.sanitizer.set_language(self.lang)
+        except Exception:
+            self.lang = previous_lang
+            try:
+                self._refresh_translations(add_category, filter_category)
+            except Exception:
+                pass
+            self.status_var.set(self._t("msg_operation_failed"))
+            return
+        if was_ready:
+            self.status_var.set(self._ready_status_text())
+        elif was_sandbox_status:
+            self.status_var.set(sandbox_status[self.lang])
         if self.on_language_changed:
             self.on_language_changed()
-        self._build_layout()
 
     def _toggle_theme(self) -> None:
-        self._snapshot_ui_state()
         self.theme_mode = "light" if self.theme_mode == "dark" else "dark"
-        self.sanitizer.set_theme(self.theme_mode)
+        try:
+            self.sanitizer.set_theme(self.theme_mode)
+        except OSError:
+            self.theme_mode = "dark" if self.theme_mode == "light" else "light"
+            self.status_var.set(self._t("msg_operation_failed"))
+            return
         ctk.set_appearance_mode("Light" if self.theme_mode == "light" else "Dark")
         if hasattr(self, "btn_theme") and self.btn_theme.winfo_exists():
             self.btn_theme.configure(
@@ -1597,7 +1872,6 @@ class _ModernControlCenter:
                 else self._t("btn_theme_dark")
             )
         self._configure_sandbox_highlight_tag()
-        self._highlight_placeholders_in_output()
 
     def _on_dict_submode_selected(self, label: str) -> None:
         mode = "rules" if label == self._dict_mode_labels[1] else "words"
@@ -1815,9 +2089,9 @@ class _ModernControlCenter:
         ]
 
         if not filtered:
-            ctk.CTkLabel(
+            self._localized_widget(ctk.CTkLabel,
                 self.vault_scroll,
-                text=self._t("vault_empty"),
+                translation_key='vault_empty',
                 font=self.font_body,
                 text_color=("#64748b", "#94a3b8"),
             ).pack(pady=40)
@@ -1870,9 +2144,9 @@ class _ModernControlCenter:
                 text_color=("#0f172a", "#f8fafc"),
             ).pack(side="left", padx=8, pady=7)
 
-            ctk.CTkButton(
+            self._localized_widget(ctk.CTkButton,
                 row_card,
-                text=self._t("btn_copy_ph"),
+                translation_key='btn_copy_ph',
                 font=self.font_small,
                 width=80,
                 height=26,
@@ -1912,15 +2186,20 @@ class _ModernControlCenter:
         self.status_var.set("🧹 OK")
 
     def _export_dictionary(self) -> None:
+        if not messagebox.askokcancel("Export", self._t("msg_export_warning"), parent=self.root):
+            return
         target = filedialog.asksaveasfilename(
             parent=self.root,
             defaultextension=".json",
-            initialfile="ai-privacy-sanitizer-backup.json",
+            initialfile="ai-privacy-sanitizer-backup.local.json",
             filetypes=[("JSON", "*.json")],
         )
         if target:
-            self.sanitizer.export_config(Path(target))
-            self.status_var.set(f"📤 {target}")
+            try:
+                self.sanitizer.export_config(Path(target))
+                self.status_var.set("📤 OK")
+            except OSError:
+                messagebox.showerror("Export", self._t("msg_operation_failed"), parent=self.root)
 
     def _import_dictionary(self) -> None:
         source = filedialog.askopenfilename(
@@ -1933,7 +2212,7 @@ class _ModernControlCenter:
                 self.refresh_all()
                 self.status_var.set(f"📥 {source}")
             except Exception as exc:
-                messagebox.showerror("Error", str(exc), parent=self.root)
+                messagebox.showerror("Import", self._t("msg_operation_failed"), parent=self.root)
 
     def _on_toggle_startup(self) -> None:
         desired = bool(self.var_startup.get())
@@ -1947,6 +2226,9 @@ class _ModernControlCenter:
         self.sanitizer.set_semantic_ip_mode(bool(self.var_semantic_ip.get()))
 
     def _start_hotkey_recording(self, target: str) -> None:
+        if platform.system() == "Darwin":
+            self.status_var.set(self._t("macos_preview_hotkeys"))
+            return
         self._recording_target = target
         if target == "sanitize":
             self.btn_rec_san.configure(text=self._t("btn_hk_recording"))
@@ -2018,12 +2300,20 @@ class _ModernControlCenter:
         return "break"
 
     def _save_and_apply_hotkeys(self) -> None:
+        if platform.system() == "Darwin":
+            self.status_var.set(self._t("macos_preview_hotkeys"))
+            return
         san_val = self.combo_hk_sanitize.get().strip().lower()
         res_val = self.combo_hk_restore.get().strip().lower()
         try:
-            updated = self.sanitizer.set_hotkeys(san_val, res_val)
+            candidate = self.sanitizer.normalize_hotkeys(san_val, res_val)
             if self.on_reload_hotkeys:
-                self.on_reload_hotkeys()
+                # The controller registers first and commits settings only on success.
+                if not self.on_reload_hotkeys(candidate):
+                    raise ValueError("Global hotkey registration failed")
+            else:
+                self.sanitizer.set_hotkeys(candidate["sanitize"], candidate["restore"])
+            updated = self.sanitizer.hotkeys
             self._refresh_hotkey_labels()
             msg = (
                 self._t("msg_hk_saved")
@@ -2031,6 +2321,9 @@ class _ModernControlCenter:
                 .replace("{res}", updated["restore"].upper())
             )
             self.status_var.set(msg)
+        except HotkeyRollbackError:
+            self.status_var.set(self._t("msg_hk_rollback_err"))
+            messagebox.showwarning("Hotkey", self._t("msg_hk_rollback_err"), parent=self.root)
         except Exception:
             self.status_var.set(self._t("msg_hk_err"))
             messagebox.showwarning("Hotkey", self._t("msg_hk_err"), parent=self.root)
@@ -2059,6 +2352,13 @@ class _ModernControlCenter:
                 .replace("Alt+R", res_disp)
             )
             self.lbl_workflow.configure(text=wf_text)
+        if hasattr(self, "guide_box"):
+            position = self.guide_box.yview()[0]
+            self.guide_box.configure(state="normal")
+            self.guide_box.delete("1.0", "end")
+            self.guide_box.insert("1.0", self._guide_text())
+            self.guide_box.configure(state="disabled")
+            self.guide_box.yview_moveto(position)
 
     def _highlight_placeholders_in_output(self) -> None:
         inner_text = getattr(self.sandbox_output, "_textbox", None)
@@ -2095,17 +2395,17 @@ class _ModernControlCenter:
             child.destroy()
 
         if not category_counts:
-            ctk.CTkLabel(
+            self._localized_widget(ctk.CTkLabel,
                 self.sandbox_cat_inner,
-                text=self._t("sandbox_cat_empty"),
+                translation_key='sandbox_cat_empty',
                 font=self.font_small,
                 text_color=("#64748b", "#94a3b8"),
             ).pack(side="left")
             return
 
-        ctk.CTkLabel(
+        self._localized_widget(ctk.CTkLabel,
             self.sandbox_cat_inner,
-            text=self._t("sandbox_cat_prefix"),
+            translation_key='sandbox_cat_prefix',
             font=self.font_small,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(side="left", padx=(0, 6))
@@ -2122,7 +2422,16 @@ class _ModernControlCenter:
 
     def _run_sandbox_sanitize(self) -> None:
         raw = self.sandbox_input.get("1.0", "end").rstrip("\n")
-        res = self.sanitizer.sanitize(raw)
+        self._sandbox_debounce_id = None
+        try:
+            res = self.sanitizer.sanitize(raw)
+        except InputTooLargeError:
+            self.sandbox_output.delete("1.0", "end")
+            self._saved_sandbox_output = ""
+            self._saved_sandbox_cat_counts = {}
+            self._render_sandbox_category_pills({})
+            self.status_var.set(self._t("notify_input_too_large"))
+            return
         self.sandbox_output.delete("1.0", "end")
         self.sandbox_output.insert("1.0", res.sanitized_text)
         self._saved_sandbox_input = raw
@@ -2131,7 +2440,9 @@ class _ModernControlCenter:
         self._highlight_placeholders_in_output()
         self._render_sandbox_category_pills(res.category_counts)
         self.refresh_all()
-        self.status_var.set(res.format_summary(self.lang))
+        # Keep only aggregate, already-displayable summaries; do not retain the raw result.
+        self._sandbox_status_texts = {lang: res.format_summary(lang) for lang in ("zh", "en")}
+        self.status_var.set(self._sandbox_status_texts[self.lang])
 
     def _run_sandbox_restore(self) -> None:
         sanitized = self.sandbox_output.get("1.0", "end").rstrip("\n")
@@ -2141,7 +2452,11 @@ class _ModernControlCenter:
         self.sandbox_output.delete("1.0", "end")
         self.sandbox_output.insert("1.0", res.restored_text)
         self._saved_sandbox_output = res.restored_text
-        self.status_var.set(res.format_summary(self.lang))
+        self._sandbox_status_texts = {
+            lang: res.format_summary(lang) + " · " + tr(lang, "msg_restore_warning")
+            for lang in ("zh", "en")
+        }
+        self.status_var.set(self._sandbox_status_texts[self.lang])
 
     def _copy_sandbox_output(self) -> None:
         out = self.sandbox_output.get("1.0", "end").strip()
@@ -2159,10 +2474,13 @@ class _ModernControlCenter:
     def _copy_text(self, text: str) -> None:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        self.status_var.set(f"📋 Copied: {text[:36]}")
+        self.status_var.set(self._t("msg_copied"))
 
     def _clear_vault_from_gui(self) -> None:
-        self.sanitizer.clear_session()
+        if self.on_clear_session:
+            self.on_clear_session()
+        else:
+            self.sanitizer.clear_session()
         self.refresh_all()
         self.status_var.set("🧹 Vault cleared")
 
