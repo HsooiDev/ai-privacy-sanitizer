@@ -74,7 +74,7 @@ flowchart TD
 ## 🚀 快速开始
 
 ### 方式一：直接双击独立 `.exe` 运行（推荐普通用户）
-1. 建议使用带标签的 GitHub Release 产物，并核对可用的 `SHA256SUMS` 与 `build-info.json`。仓库根目录的 EXE 是历史二进制，本次源码修改不会更新它，也未验证其构建来源。
+1. 从同一个仓库版本下载 [Sanitizer.exe](Sanitizer.exe)、[SHA256SUMS](SHA256SUMS) 和 [build-info.json](build-info.json)。运行前使用 `Get-FileHash .\Sanitizer.exe -Algorithm SHA256` 核对 EXE 校验和。记录中的应用源码版本已与 EXE 内嵌应用模块比对；修改源码不会自动重新构建 EXE。
 2. 首次启动会自动弹出**可视化控制中心窗口**，并在右下角系统托盘生成蓝色盾牌锁图标。
 3. 点击窗口右上角 `X` 会自动最小化常驻到右下角系统托盘；左键点击托盘图标或再次双击 `.exe` 即可随时唤出控制中心。
 
@@ -200,7 +200,7 @@ Get-Content reply.txt | python -m src.main --restore-stdin --vault-file private-
 
 CI 与 Windows 发行构建使用 `python -m pip install --require-hashes -r requirements-lock.txt`，固定直接/传递依赖的精确版本及 PyPI 产物 SHA-256。`requirements-macos-lock.txt` 在共享版本锁定之上补充带哈希的 macOS 构建依赖；源码安装保留 `requirements.txt` 兼容范围。更新时在干净的 Python 3.11 环境明确解析版本、包含 Windows 专用依赖、对照 PyPI 核验哈希，并只运行相关定向检查。Actions 固定完整上游提交 SHA；更新 SHA 与版本注释前需审阅上游变更。
 
-只有标签 push 的发布 Job 获得 `contents: write`，PR/测试 Job 使用只读权限。后续发布附带源码提交/运行信息和产物校验和；校验和用于检测下载变更，不等同于代码签名或不同 runner 上逐字节可复现构建。仓库内的历史 EXE 不代表当前工作区源码。
+只有标签 push 的发布 Job 获得 `contents: write`，PR/测试 Job 使用只读权限。发行构建附带源码提交/运行信息和产物校验和；仓库内的 `Sanitizer.exe` 在 `build-info.json` 中单独记录源码比对与验证结果。校验和用于检测下载变更，不等同于代码签名或不同 runner 上逐字节可复现构建。比较 EXE 与源码时，请核对记录中的版本和校验和。
 
 ---
 

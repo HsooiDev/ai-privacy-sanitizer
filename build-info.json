@@ -1,0 +1,43 @@
+{
+  "application": "Sanitizer",
+  "version": "0.3.1",
+  "platform": "Windows",
+  "architecture": "AMD64",
+  "artifact": {
+    "filename": "Sanitizer.exe",
+    "sha256": "c809366b8c7c0aa3d286e1c4d4cf6d6751826dfdf42306a737a12323cefb2d5c",
+    "bytes": 20982665
+  },
+  "application_source_commit": "ecd175ba0817747a454a7ae2e0b945e725bc7a5e",
+  "source_verification": {
+    "method": "Embedded application module comparison",
+    "modules_matched": 9,
+    "result": "passed"
+  },
+  "source_sha256": {
+    "src/__init__.py": "f1d5aab77453fa02140e00a36fa47eb7130474a8692ddda2136a7be951ce7c64",
+    "src/gui.py": "9c5a80e96caf44dd83dd39fb2a5db504507deaf333effcf6743445f66b267ce4",
+    "src/i18n.py": "5e21a94c4d01f9a9ea3512d0d97775cd8199033c1547b7d91f51ac86b530df7f",
+    "src/main.py": "7577810a8dc3da95f1a65692fc9cbc21002e179d2a6e5d2838a4c3a7e092bceb",
+    "src/rules.py": "de79c66807d427fa0eec76498d81c9c1a2211827572ae9f44e62e8d7c537ca0b",
+    "src/sanitizer.py": "04382d884adc0451060ca33080d5bf698dc53bbaf840f15b7a28d91405163b09",
+    "src/secure_io.py": "0b2f4cc12766b27e4412efa506500987b8f3c4e427b8007d7ebfaa55f67f1624",
+    "src/startup.py": "b97e609820d5df0330ddf2bfeefb6d4d842cb55f902ae6f223c11f8ac0f87257",
+    "src/windows_hotkeys.py": "f08702f34b417c70d86e344c05339bda76610a1fcd84e08cf48acd5e7d42fa78"
+  },
+  "build_tools": {
+    "pyinstaller": "6.22.3",
+    "customtkinter": "6.0.0",
+    "Pillow": "13.0.0"
+  },
+  "validation": {
+    "cli_self_test_exit": 0,
+    "focused_gui_tests_passed": 31,
+    "manual_windows_gui_check": "passed"
+  },
+  "privacy_review": {
+    "embedded_private_config_files": false,
+    "known_local_identifiers_detected": false,
+    "decompressed_entries_reviewed": 1583
+  }
+}

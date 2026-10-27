@@ -74,7 +74,7 @@ flowchart TD
 ## 🚀 Getting Started
 
 ### Option 1: Standalone Windows Executable (Recommended for Users)
-1. Prefer the EXE from a tagged GitHub Release and verify its `SHA256SUMS` and `build-info.json` when available. The repository-root EXE is a historical binary; source edits do not update it, and its provenance has not been verified by this change.
+1. Download [Sanitizer.exe](Sanitizer.exe), [SHA256SUMS](SHA256SUMS), and [build-info.json](build-info.json) from the same repository revision. Verify the EXE with `Get-FileHash .\Sanitizer.exe -Algorithm SHA256` before running it. The recorded application source revision was checked against the executable's embedded application modules; editing source files does not automatically rebuild the EXE.
 2. On first launch, the **Visual Control Center** opens automatically and places a blue shield-lock icon in your Windows system tray.
 3. Closing the window (`X`) minimizes it safely to the system tray. Left-click the tray icon or double-click the `.exe` anytime to reopen the Control Center.
 
@@ -200,7 +200,7 @@ Input, output, vault and configuration paths must be distinct, including aliases
 
 CI and Windows releases install exact direct/transitive versions and upstream artifact SHA-256 hashes from `requirements-lock.txt` using `python -m pip install --require-hashes -r requirements-lock.txt`. `requirements-macos-lock.txt` extends these shared pins with hashed macOS build dependencies; `requirements.txt` keeps source-install compatibility ranges. To update, resolve deliberately in a clean Python 3.11 environment, include Windows-only dependencies, verify the hashes against PyPI, and run only the affected focused checks. Actions use full upstream commit SHAs; review the upstream change before updating each SHA/comment.
 
-Only the tag-push release job receives `contents: write`; PR and test jobs use read access. Future releases include source commit/run metadata and asset checksums. These checksums detect changed downloads; they are not code signing or a guarantee of bit-identical builds across runner images. Do not treat the checked-in EXE as a build of your current working tree.
+Only the tag-push release job receives `contents: write`; PR and test jobs use read access. Release builds include source commit/run metadata and asset checksums. The checked-in `Sanitizer.exe` has separate source-verification and validation records in `build-info.json`. These checksums detect changed downloads; they are not code signing or a guarantee of bit-identical builds across runner images. Check the recorded revision and checksum when comparing an EXE with source.
 
 ---
 

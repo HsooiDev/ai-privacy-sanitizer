@@ -88,9 +88,9 @@ jobs:
       - name: Export multi-resolution shield icon
         run: python -m src.main --export-ico assets/icon.ico
 
-      - name: Package standalone windowed AI-Privacy-Sanitizer.exe
+      - name: Package standalone windowed Sanitizer.exe
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "AI-Privacy-Sanitizer" --icon "assets/icon.ico" --collect-all customtkinter --hidden-import plyer.platforms.win.notification --exclude-module pytest --exclude-module unittest --exclude-module pdb --exclude-module pydoc src/main.py
+          pyinstaller --noconfirm AI-Privacy-Sanitizer.spec
 
       - name: Record source revision and asset checksums
         shell: pwsh
@@ -103,7 +103,7 @@ jobs:
             python = (python --version)
           }
           $metadata | ConvertTo-Json | Set-Content -Encoding utf8 dist/build-info.json
-          $assets = @("dist/AI-Privacy-Sanitizer.exe", "web/index.html", "dist/build-info.json")
+          $assets = @("dist/Sanitizer.exe", "web/index.html", "dist/build-info.json")
           $sums = foreach ($asset in $assets) {
             $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $([IO.Path]::GetFileName($asset))"
@@ -114,7 +114,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
-            dist/AI-Privacy-Sanitizer.exe
+            dist/Sanitizer.exe
             web/index.html
             dist/build-info.json
             dist/SHA256SUMS
