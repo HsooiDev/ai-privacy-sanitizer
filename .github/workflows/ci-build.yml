@@ -57,7 +57,7 @@ jobs:
       - name: Check Web restoration and masked preview boundaries
         run: node tests/test_web_security.cjs
 
-      - name: Verify Python and Web rule parity
+      - name: Verify Python, Web, and Browser Extension rule parity
         run: python scripts/sync_web_rules.py --check
 
       - name: Run CLI self-test
@@ -94,6 +94,34 @@ jobs:
       - name: Package standalone windowed Sanitizer.exe
         run: |
           python -m PyInstaller --noconfirm AI-Privacy-Sanitizer.spec
+
+      - name: Sign Windows executable (optional)
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+          TSA_URL: ${{ secrets.WINDOWS_CODESIGN_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PFX_B64) -or [string]::IsNullOrWhiteSpace($env:PFX_PASS)) {
+            Write-Host "No code-signing secrets configured; skipping Authenticode signing."
+            exit 0
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:PFX_B64))
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+              Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+            if (-not $signtool) {
+              throw "signtool.exe not found on runner"
+            }
+            $tsa = if ([string]::IsNullOrWhiteSpace($env:TSA_URL)) { "http://timestamp.digicert.com" } else { $env:TSA_URL }
+            & $signtool sign /fd SHA256 /f $pfxPath /p $env:PFX_PASS /tr $tsa /td SHA256 "dist/Sanitizer.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $signtool verify /pa "dist/Sanitizer.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            if (Test-Path $pfxPath) { Remove-Item -Force $pfxPath }
+          }
 
       - name: Record source revision and asset checksums
         shell: pwsh

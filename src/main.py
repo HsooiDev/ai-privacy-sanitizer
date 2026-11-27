@@ -1,6 +1,7 @@
 """System tray application, GUI launcher, clipboard cruise monitor, global hotkeys, and CLI."""
 
 import argparse
+from dataclasses import dataclass, field
 import getpass
 import json
 import os
@@ -10,7 +11,7 @@ import sys
 import threading
 import tempfile
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw
 
@@ -30,9 +31,23 @@ from src.gui import GuiController, enable_high_dpi_awareness
 from src.i18n import tr
 from src.rules import SAMPLE_TEST_PAYLOAD
 from src.sanitizer import HotkeyRollbackError, InputTooLargeError, MAX_SANITIZE_CHARS, PrivacySanitizer
+from src.scanner import format_scan_report, scan_git_staged, scan_path
 from src.secure_io import atomic_write_private, validate_private_path
 from src.startup import SingleInstanceGuard, is_startup_enabled, set_startup_enabled
 from src.vault_crypto import is_encrypted_vault_payload
+
+
+@dataclass
+class LastClipboardSanitizeRecord:
+    """In-memory snapshot of the most recent clipboard sanitization for Dashboard Quick-View."""
+
+    raw_text: str
+    sanitized_text: str
+    source: str
+    total_count: int
+    category_counts: Dict[str, int] = field(default_factory=dict)
+    items: List[Tuple[str, str, str]] = field(default_factory=list)
+    timestamp: float = field(default_factory=time.time)
 
 
 def create_shield_lock_icon(size: int = 64, state: str = "ready") -> Image.Image:
@@ -206,7 +221,19 @@ class SanitizerTrayApp:
         self._last_activity_ts: float = time.monotonic()
         self._last_tray_state: str = ""
         self._windows_hotkeys = None
+        self._clipboard_watcher = None
+        self._cruise_last_seen: str = ""
         self._last_hotkey_conflict: Optional[str] = None
+        self._last_clipboard_record: Optional[LastClipboardSanitizeRecord] = None
+        self._bound_hotkeys: Dict[str, str] = {}
+        self._tray_i18n_lock = threading.Lock()
+        self._tray_i18n_timer: Optional[threading.Timer] = None
+        self._hotkey_status: Dict[str, Any] = {
+            "state": "disabled" if platform.system() == "Darwin" else "unregistered",
+            "conflict_key": None,
+            "bound": {},
+            "configured": dict(self.sanitizer.hotkeys),
+        }
         self.gui = GuiController(
             sanitizer=self.sanitizer,
             icon_factory=create_shield_lock_icon,
@@ -222,8 +249,80 @@ class SanitizerTrayApp:
             on_state_changed=self._update_tray_icon_state,
             get_idle_seconds_left=self.get_idle_seconds_remaining,
             get_last_hotkey_conflict=lambda: self._last_hotkey_conflict,
+            get_hotkey_status=self.get_hotkey_status,
+            on_auto_fix_hotkeys=self.auto_fix_hotkey_conflict,
+            get_last_clipboard_record=self.get_last_clipboard_record,
+            on_allowlist_and_rerun=self.allowlist_and_rerun_last_clipboard,
         )
 
+    def get_hotkey_status(self) -> Dict[str, Any]:
+        """Return live system-level global hotkey binding status."""
+        status = getattr(self, "_hotkey_status", None)
+        if not isinstance(status, dict):
+            return {
+                "state": "disabled" if platform.system() == "Darwin" else "unregistered",
+                "conflict_key": getattr(self, "_last_hotkey_conflict", None),
+                "bound": {},
+                "configured": dict(self.sanitizer.hotkeys),
+            }
+        return {
+            "state": status.get("state", "unregistered"),
+            "conflict_key": status.get("conflict_key"),
+            "bound": dict(status.get("bound", {})),
+            "configured": dict(self.sanitizer.hotkeys),
+        }
+
+    def get_last_clipboard_record(self) -> Optional[LastClipboardSanitizeRecord]:
+        """Return the most recent clipboard sanitization record (in-memory only)."""
+        return getattr(self, "_last_clipboard_record", None)
+
+    def _record_clipboard_sanitization(
+        self, raw_text: str, result, *, source: str
+    ) -> None:
+        self._last_clipboard_record = LastClipboardSanitizeRecord(
+            raw_text=raw_text,
+            sanitized_text=result.sanitized_text,
+            source=source,
+            total_count=result.total_count,
+            category_counts=dict(result.category_counts),
+            items=list(getattr(result, "matched_items", [])),
+            timestamp=time.time(),
+        )
+
+    def allowlist_and_rerun_last_clipboard(self, original_value: str) -> Tuple[bool, str]:
+        """Allowlist a false-positive value from the recent clipboard diff and update clipboard if unchanged."""
+        cleaned = str(original_value or "").strip()
+        with self._action_lock:
+            rec = getattr(self, "_last_clipboard_record", None)
+            if not cleaned or rec is None:
+                return False, self._t("msg_operation_failed")
+
+            self.sanitizer.add_allowlist_item(cleaned)
+            for ph, orig, _cat in self.sanitizer.vault.snapshot_placeholders():
+                if orig.lower() == cleaned.lower():
+                    self.sanitizer.vault.remove_mapping(ph)
+
+            new_res = self.sanitizer.sanitize(rec.raw_text)
+            self._record_clipboard_sanitization(rec.raw_text, new_res, source=rec.source)
+            self._touch_activity()
+            try:
+                if not _replace_clipboard_if_unchanged(rec.sanitized_text, new_res.sanitized_text):
+                    self._update_tray_icon_state()
+                    if getattr(self, "gui", None) is not None:
+                        self.gui.request_refresh()
+                    return False, self._t("msg_allowlist_rerun_clip_changed")
+                self._last_written_clipboard = new_res.sanitized_text
+                self._cruise_last_seen = new_res.sanitized_text
+            except Exception:
+                self._update_tray_icon_state()
+                if getattr(self, "gui", None) is not None:
+                    self.gui.request_refresh()
+                return False, self._t("notify_clip_write_err").format(err="unavailable")
+
+            self._update_tray_icon_state()
+            if getattr(self, "gui", None) is not None:
+                self.gui.request_refresh()
+            return True, self._t("msg_allowlist_rerun_ok")
     def _t(self, key: str) -> str:
         return tr(self.sanitizer.language, key)
 
@@ -311,6 +410,7 @@ class SanitizerTrayApp:
                 else:
                     _safe_clipboard_copy(text)
                 self._last_written_clipboard = text
+                self._cruise_last_seen = text
                 self._touch_activity()
                 return True
             except Exception:
@@ -342,6 +442,8 @@ class SanitizerTrayApp:
                         return
                     self._push_undo_snapshot(raw_text)
                     self._last_written_clipboard = result.sanitized_text
+                    self._cruise_last_seen = result.sanitized_text
+                    self._record_clipboard_sanitization(raw_text, result, source="hotkey")
                 except Exception:
                     self.notify(self._t("notify_clip_write_err").format(err="unavailable"), tone="error")
                     return
@@ -378,6 +480,7 @@ class SanitizerTrayApp:
                         self.notify(self._t("notify_clip_changed"), tone="warning")
                         return
                     self._last_written_clipboard = result.restored_text
+                    self._cruise_last_seen = result.restored_text
                 except Exception:
                     self.notify(self._t("notify_clip_write_err").format(err="unavailable"), tone="error")
                     return
@@ -405,6 +508,7 @@ class SanitizerTrayApp:
                     return
                 self._clipboard_undo_stack.pop()
                 self._last_written_clipboard = previous_raw
+                self._cruise_last_seen = previous_raw
                 self.gui.request_refresh()
                 self.notify(
                     self._t("notify_undo_ok").format(left=len(self._clipboard_undo_stack)),
@@ -451,6 +555,7 @@ class SanitizerTrayApp:
         with self._action_lock:
             self._clipboard_undo_stack.clear()
             self._last_written_clipboard = ""
+            self._last_clipboard_record = None
             cleared = self.sanitizer.clear_session()
             self._touch_activity()
         self._update_tray_icon_state()
@@ -466,6 +571,7 @@ class SanitizerTrayApp:
                 if self.get_idle_seconds_remaining() == 0:
                     self._clipboard_undo_stack.clear()
                     self._last_written_clipboard = ""
+                    self._last_clipboard_record = None
                     cleared = self.sanitizer.clear_session()
                     self._touch_activity()
                 else:
@@ -477,8 +583,20 @@ class SanitizerTrayApp:
     def exit_app(self, *_args) -> None:
         """Unregister hotkeys, stop GUI and clipboard watcher, and stop system tray loop."""
         self._stop_event.set()
+        with self._tray_i18n_lock:
+            pending_i18n = getattr(self, "_tray_i18n_timer", None)
+            if pending_i18n is not None:
+                pending_i18n.cancel()
+                self._tray_i18n_timer = None
         with self._action_lock:
             self._clipboard_undo_stack.clear()
+            self._last_clipboard_record = None
+        if getattr(self, "_clipboard_watcher", None) is not None:
+            try:
+                self._clipboard_watcher.stop()
+            except Exception:
+                pass
+            self._clipboard_watcher = None
         if platform.system() == "Windows":
             if self._windows_hotkeys is not None:
                 self._windows_hotkeys.stop()
@@ -519,6 +637,8 @@ class SanitizerTrayApp:
                 if result.total_count and _replace_clipboard_if_unchanged(current, result.sanitized_text):
                     self._push_undo_snapshot(current)
                     self._last_written_clipboard = result.sanitized_text
+                    self._cruise_last_seen = result.sanitized_text
+                    self._record_clipboard_sanitization(current, result, source="cruise")
                     self._touch_activity()
                     self._update_tray_icon_state()
                     self.gui.request_refresh()
@@ -534,13 +654,35 @@ class SanitizerTrayApp:
                 # Keep last_seen unchanged on read/write failure so the next poll can retry.
                 return last_seen
 
+    def _on_windows_clipboard_update(self) -> None:
+        """Handle WM_CLIPBOARDUPDATE natively with zero polling and zero lock contention when Cruise is OFF."""
+        if self._stop_event.is_set() or not self.sanitizer.auto_sanitize_clipboard:
+            return
+        self._cruise_last_seen = self._cruise_once(getattr(self, "_cruise_last_seen", ""))
+
     def _start_clipboard_cruise_watcher(self) -> None:
-        """Best-effort polling loop plus idle auto-wipe watchdog."""
+        """Use native Win32 AddClipboardFormatListener on Windows; fall back to polling elsewhere."""
+        if platform.system() == "Windows":
+            try:
+                from src.windows_clipboard_watcher import WindowsClipboardWatcher
+
+                watcher = WindowsClipboardWatcher(on_clipboard_update=self._on_windows_clipboard_update)
+                watcher.start()
+                self._clipboard_watcher = watcher
+
+                def _idle_watchdog() -> None:
+                    while not self._stop_event.wait(2.0):
+                        self._check_idle_wipe()
+
+                threading.Thread(target=_idle_watchdog, daemon=True, name="aps-idle-watchdog").start()
+                return
+            except Exception:
+                self._clipboard_watcher = None
+
         def _cruise_loop() -> None:
-            last_seen = ""
             tick = 0
             while not self._stop_event.wait(0.55):
-                last_seen = self._cruise_once(last_seen)
+                self._cruise_last_seen = self._cruise_once(getattr(self, "_cruise_last_seen", ""))
                 tick += 1
                 if tick % 4 == 0:
                     self._check_idle_wipe()
@@ -551,11 +693,18 @@ class SanitizerTrayApp:
         """Register persisted settings or a candidate that has not been saved yet."""
         if platform.system() == "Darwin":
             # keyboard's current Darwin backend requires root. Keep the preview unprivileged.
+            self._hotkey_status = {
+                "state": "disabled",
+                "conflict_key": None,
+                "bound": {},
+                "configured": dict(self.sanitizer.hotkeys),
+            }
             return False
         self._last_hotkey_conflict = None
         hotkeys = self.sanitizer.hotkeys if hotkeys is None else hotkeys
         sanitize_key = hotkeys.get("sanitize", "alt+s")
         restore_key = hotkeys.get("restore", "alt+r")
+        previous_restored = False
         try:
             if platform.system() == "Windows":
                 from src.windows_hotkeys import WindowsHotkeys
@@ -572,9 +721,20 @@ class SanitizerTrayApp:
                 except Exception:
                     self._last_hotkey_conflict = getattr(candidate, "failed_binding", None)
                     if previous is not None:
-                        previous.start()
+                        try:
+                            previous.start()
+                            previous_restored = True
+                        except Exception:
+                            previous_restored = False
                     raise
                 self._windows_hotkeys = candidate
+                self._bound_hotkeys = {"sanitize": sanitize_key, "restore": restore_key}
+                self._hotkey_status = {
+                    "state": "ready",
+                    "conflict_key": None,
+                    "bound": dict(self._bound_hotkeys),
+                    "configured": dict(self.sanitizer.hotkeys),
+                }
                 return True
 
             import keyboard
@@ -587,28 +747,61 @@ class SanitizerTrayApp:
                 restore_key,
                 lambda: threading.Thread(target=self.restore_clipboard, daemon=True).start(),
             )
+            self._bound_hotkeys = {"sanitize": sanitize_key, "restore": restore_key}
+            self._hotkey_status = {
+                "state": "ready",
+                "conflict_key": None,
+                "bound": dict(self._bound_hotkeys),
+                "configured": dict(self.sanitizer.hotkeys),
+            }
             return True
         except Exception as exc:
+            if previous_restored:
+                self._hotkey_status = {
+                    "state": "ready",
+                    "conflict_key": None,
+                    "bound": dict(getattr(self, "_bound_hotkeys", {})),
+                    "configured": dict(self.sanitizer.hotkeys),
+                }
+            else:
+                self._hotkey_status = {
+                    "state": "conflict",
+                    "conflict_key": self._last_hotkey_conflict,
+                    "bound": dict(getattr(self, "_bound_hotkeys", {})),
+                    "configured": dict(self.sanitizer.hotkeys),
+                }
             if sys.stderr is not None:
                 sys.stderr.write(
                     f"[WARN] Failed to register global hotkeys ({exc}). Tray menu remains active.\n"
                 )
             return False
 
+    def _apply_tray_i18n_update(self) -> None:
+        if self._stop_event.is_set() or self.icon is None:
+            return
+        try:
+            hk = self.sanitizer.hotkeys
+            san_u = hk.get("sanitize", "alt+s").upper()
+            res_u = hk.get("restore", "alt+r").upper()
+            self.icon.title = self._t("tray_tooltip").format(
+                app=APP_NAME, san=san_u, res=res_u
+            )
+            self.icon.update_menu()
+        except Exception:
+            pass
+
     def refresh_tray_i18n(self) -> None:
-        """Refresh tray tooltip, icon state, and menu labels when language or hotkeys change."""
-        if self.icon is not None:
-            try:
-                hk = self.sanitizer.hotkeys
-                san_u = hk.get("sanitize", "alt+s").upper()
-                res_u = hk.get("restore", "alt+r").upper()
-                self.icon.title = self._t("tray_tooltip").format(
-                    app=APP_NAME, san=san_u, res=res_u
-                )
-                self._update_tray_icon_state()
-                self.icon.update_menu()
-            except Exception:
-                pass
+        """Coalesce rapid language/hotkey tray menu refreshes off the Tk UI thread."""
+        if self.icon is None or self._stop_event.is_set():
+            return
+        with self._tray_i18n_lock:
+            pending = getattr(self, "_tray_i18n_timer", None)
+            if pending is not None:
+                pending.cancel()
+            timer = threading.Timer(0.15, self._apply_tray_i18n_update)
+            timer.daemon = True
+            self._tray_i18n_timer = timer
+            timer.start()
 
     def _reload_hotkey_registration(self, hotkeys: Dict[str, str]) -> bool:
         """Replace platform registrations without changing the persisted settings."""
@@ -641,8 +834,59 @@ class SanitizerTrayApp:
                 if not self._reload_hotkey_registration(previous):
                     raise HotkeyRollbackError("Active global hotkeys could not be restored") from error
                 raise
+        self._hotkey_status = {
+            "state": "ready",
+            "conflict_key": None,
+            "bound": dict(candidate),
+            "configured": dict(self.sanitizer.hotkeys),
+        }
         self.refresh_tray_i18n()
         return True
+
+    def auto_fix_hotkey_conflict(self) -> Tuple[bool, Dict[str, str], Optional[str]]:
+        """Automatically search for and bind non-conflicting fallback global hotkeys."""
+        if platform.system() == "Darwin":
+            return False, self.sanitizer.hotkeys, None
+
+        configured = self.sanitizer.hotkeys
+        conflict = self._last_hotkey_conflict or (
+            self._hotkey_status.get("conflict_key") if hasattr(self, "_hotkey_status") else None
+        )
+        cur_san = configured.get("sanitize", "alt+s")
+        cur_res = configured.get("restore", "alt+r")
+
+        candidates: List[Tuple[str, str]] = []
+        if conflict == cur_san:
+            for alt_san in ("ctrl+shift+s", "ctrl+alt+s", "alt+shift+s", "f8", "f9"):
+                candidates.append((alt_san, cur_res))
+        elif conflict == cur_res:
+            for alt_res in ("ctrl+shift+r", "ctrl+alt+r", "alt+shift+r", "f9", "f10"):
+                candidates.append((cur_san, alt_res))
+
+        candidates.extend([
+            ("alt+s", "ctrl+shift+r"),
+            ("ctrl+shift+s", "ctrl+shift+r"),
+            ("ctrl+alt+s", "ctrl+alt+r"),
+            ("alt+shift+s", "alt+shift+r"),
+            ("f8", "f9"),
+            ("f10", "f11"),
+        ])
+
+        seen = set()
+        for san_c, res_c in candidates:
+            if san_c == res_c or (san_c == cur_san and res_c == cur_res):
+                continue
+            pair = (san_c, res_c)
+            if pair in seen:
+                continue
+            seen.add(pair)
+            try:
+                if self.reload_hotkeys({"sanitize": san_c, "restore": res_c}):
+                    return True, self.sanitizer.hotkeys, conflict
+            except Exception:
+                continue
+
+        return False, self.sanitizer.hotkeys, conflict
 
     def _register_startup_hotkeys(self) -> Optional[str]:
         """Bind startup hotkeys, automatically falling back on Windows GPU overlay Alt+R conflicts."""
@@ -912,6 +1156,27 @@ def main(
         default="",
         help="Name of environment variable holding vault passphrase (avoid passing secrets in argv)",
     )
+    parser.add_argument(
+        "--scan",
+        type=str,
+        default="",
+        help="Read-only secret scan of a local file or directory (outputs masked summary; exit 1 if secrets found)",
+    )
+    parser.add_argument(
+        "--git-staged",
+        action="store_true",
+        help="Read-only secret scan of Git staged changes (git diff --cached; exit 1 if secrets found)",
+    )
+    parser.add_argument(
+        "--entropy",
+        action="store_true",
+        help="Enable opt-in high Shannon entropy fallback detection for this CLI run",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output --scan / --git-staged findings as masked JSON",
+    )
     args = parser.parse_args(argv)
 
     if args.export_ico:
@@ -920,6 +1185,41 @@ def main(
 
     if args.self_test:
         return run_self_test()
+
+    if args.scan or args.git_staged:
+        _configure_stdio_utf8()
+        try:
+            conflict_flags = (
+                args.stdin,
+                args.restore_stdin,
+                args.file,
+                args.restore_file,
+                bool(args.scan) and bool(args.git_staged),
+            )
+            if any(conflict_flags):
+                raise ValueError("Choose either --scan OR --git-staged without pipe/file modes")
+            active_sanitizer = sanitizer or PrivacySanitizer(read_only=True)
+            entropy_flag = True if args.entropy else None
+            if args.git_staged:
+                findings, files_scanned = scan_git_staged(active_sanitizer, entropy_enabled=entropy_flag)
+            else:
+                findings, files_scanned = scan_path(
+                    active_sanitizer, Path(args.scan), entropy_enabled=entropy_flag
+                )
+            report = format_scan_report(
+                findings,
+                files_scanned,
+                as_json=bool(args.json),
+                lang=active_sanitizer.language,
+            )
+            if sys.stdout is not None:
+                sys.stdout.write(report + "\n")
+                sys.stdout.flush()
+            return 1 if findings else 0
+        except (OSError, ValueError, RuntimeError, InputTooLargeError):
+            if sys.stderr is not None:
+                sys.stderr.write("Error: read-only scan failed; check target path or Git repository state.\n")
+            return 2
 
     if args.stdin or args.restore_stdin or args.file or args.restore_file:
         _configure_stdio_utf8()
@@ -960,7 +1260,10 @@ def main(
                 if result.restored_count > 0:
                     sys.stderr.write("Warning: restored output contains original values; review locally before sharing.\n")
             else:
-                result = active_sanitizer.sanitize(raw_input)
+                result = active_sanitizer.sanitize(
+                    raw_input,
+                    entropy_enabled=(True if args.entropy else None),
+                )
                 output = result.sanitized_text
                 if vault_path is not None:
                     active_sanitizer.vault.save_to_file(vault_path, passphrase=passphrase)

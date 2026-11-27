@@ -42,6 +42,19 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "sidebar_cruise_short": "巡航模式",
         "sidebar_idle_label": "⏱️ 自动清空",
         "sidebar_idle_off": "未开启",
+        "hk_status_side_ready": "⌨️ 热键已就绪",
+        "hk_status_side_conflict": "⚠️ 冲突: {key}",
+        "hk_status_side_disabled": "⌨️ 热键未启用",
+        "hk_status_home_ready": "⌨️ 全局热键已就绪 ({san} / {res})",
+        "hk_status_home_conflict": "⚠️ 热键 [{key}] 被其他软件抢占，未生效",
+        "hk_status_home_disabled": "ℹ️ 当前平台预览模式下全局热键已禁用",
+        "hk_status_settings_ready": "✅ 系统热键已绑定生效：{san} | {res}",
+        "hk_status_settings_conflict": "⚠️ 热键冲突未生效：[{key}] 已被其他软件（如显卡 Overlay）抢占",
+        "hk_status_settings_disabled": "ℹ️ macOS 预览版不注册全局热键",
+        "btn_hk_autofix": "🔧 一键自动顺延修复",
+        "btn_hk_autofix_short": "🔧 一键修复",
+        "msg_hk_autofix_ok": "✅ 已自动顺延修复并绑定：脱敏 [{san}] | 还原 [{res}]",
+        "msg_hk_autofix_fail": "❌ 未找到可用顺延组合键，请手动录制其他快捷键",
         "nav_home": "🏠 首页总览",
         "nav_sandbox": "🧪 脱敏沙盒",
         "nav_dict": "📚 词库与规则",
@@ -51,22 +64,27 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # Home Dashboard
         "hero_badge": "🟢 智能防护已就绪 · 零配置开箱即用",
         "hero_desc": (
-            "无需预先填写任何资料！系统已自动开启 38+ 项高危敏感信息防护：\n"
-            "API Keys、Basic/Bearer 认证、含 @ 数据库密码、SSH/PGP 私钥、IPv4/压缩 IPv6、\n"
-            "本机路径用户名、大马 +60 手机与 MyKad NRIC、中国身份证校验、护照与银行卡。"
+            "无需预先填写任何资料！系统已自动开启 50+ 项高危敏感信息防护：\n"
+            "API Keys（OpenAI/AWS/Cloudflare/Supabase/Vercel/Azure）、数据库密码、SSH/PGP 私钥、\n"
+            "IPv4/IPv6、本机路径、国际手机号、身份证件、护照、银行卡及结构化配置密钥。"
         ),
         "btn_hero_sanitize": "🛡️ 一键脱敏剪贴板 (Alt + S)",
         "btn_hero_restore": "🔄 一键还原剪贴板 (Alt + R)",
         "btn_hero_undo": "⏪ 撤销上次脱敏",
-        "stat_intercepted_title": "本次会话累计保护",
-        "stat_intercepted_unit": "处敏感信息",
-        "stat_vault_title": "当前内存映射数",
-        "stat_vault_unit": "组对应关系",
-        "stat_rules_title": "高强度检测规则",
-        "stat_rules_unit": "项已启用",
+        "stat_intercepted_title": "本次已拦截",
+        "stat_intercepted_unit": "处",
+        "stat_intercepted_hint": "已拦截汇总 · 查看 ↗",
+        "stat_vault_title": "待还原映射",
+        "stat_vault_unit": "条",
+        "stat_vault_hint": "内存对照表 · 管理 ↗",
+        "stat_rules_title": "自动保护项",
+        "stat_rules_unit": "项开启",
+        "stat_rules_hint": "密钥/IP/证件 · 清单 ↗",
         "switches_section_title": "⚡ 常用防护模式（点击开关立即生效）",
         "sw_cruise_title": "⚡ 复制即自动脱敏（懒人巡航模式）",
-        "sw_cruise_desc": "约每 0.55 秒尽力检查（上限 1,500,000 字符），不保证粘贴前完成；敏感文本请手动脱敏并检查结果",
+        "sw_cruise_desc": "Windows 使用原生剪贴板事件即时监听（零轮询）；其他平台每 0.55 秒检查，敏感文本仍建议核对",
+        "sw_entropy_title": "🧬 高信息熵随机密钥兜底检测（实验性）",
+        "sw_entropy_desc": "仅对赋值语句右侧（= / :）的高随机度长字符串生效，避免误伤普通英文句子与 UUID",
         "sw_semantic_title": "🌐 同类型语义伪装 (192.0.2.x / user1@example.com)",
         "sw_semantic_desc": "将真实 IP / 邮箱 / 路径伪装为合法测试格式，避免 AI 排查服务器或网络配置时报错",
         "sw_ai_hint_title": "🤖 附带 AI 防变形指令（提升还原成功率）",
@@ -82,10 +100,25 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "lbl_idle_wipe": "⏱️ 内存保险箱闲置自动清空：",
         "idle_wipe_off": "关闭（仅退出时清空）",
         "idle_wipe_min": "{m} 分钟",
-        "file_drop_title": "📄 本地文件一键脱敏 / 还原",
-        "file_drop_desc": "支持 .env / .log / .json / .yaml / .csv / .txt，本地原子导出并同步映射",
+        "file_drop_title": "📄 本地文件 / 文件夹拖拽脱敏与还原",
+        "file_drop_desc": "支持单文件、多文件或整个目录（.env/.log/.json/.yaml/.csv/.txt），同批共享映射且绝不覆盖原文件",
+        "file_drop_zone_hint": "📥 将文件或日志文件夹拖入窗口即可处理",
+        "file_drop_mode_san": "🛡️ 拖入脱敏",
+        "file_drop_mode_res": "🔄 拖入还原",
         "btn_sanitize_file": "📄 选择文件脱敏",
         "btn_restore_file": "🔄 选择文件还原",
+        "btn_batch_folder": "📁 批量目录",
+        "btn_open_batch_out": "📂 打开输出目录",
+        "msg_batch_done": "📁 批量完成：{ok} 个文件（共 {hits} 处，跳过 {skip}）→ {dest}",
+        "msg_batch_empty": "ℹ️ 所选路径中未发现可处理的文本文件",
+        "recent_clip_title": "🔎 最近一次剪贴板脱敏快览",
+        "recent_clip_empty": "暂无剪贴板脱敏记录。按 Alt+S 或开启巡航模式脱敏后，可在此快速核对并一键放行误伤词。",
+        "recent_clip_reveal": "👁️ 显示原值",
+        "btn_allowlist_rerun": "🏳️ 加入白名单并重跑",
+        "msg_allowlist_rerun_ok": "🏳️ 已加入白名单并无感更新当前剪贴板",
+        "msg_allowlist_rerun_clip_changed": "🏳️ 已加入白名单（检测到剪贴板已被其他操作修改，未覆盖当前剪贴板）",
+        "recent_src_hotkey": "快捷键",
+        "recent_src_cruise": "巡航模式",
         # Hotkeys & Settings Page
         "hotkey_section_title": "⌨️ 全局快捷键自定义（点击直接按键录制 · Esc 取消）",
         "hotkey_section_desc": "点击快捷键框或“录制按键”，直接按下任意组合键（支持字母/数字/符号/方向键/小键盘 + Ctrl/Alt/Shift/Win，或独立 F1-F24），录制后立即生效并同步更新使用指南：",
@@ -125,10 +158,29 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "sandbox_cat_prefix": "📊 拦截明细：",
         "ctx_allowlist_placeholder": "🏳️ 将此原值加入白名单 (放行)",
         # Dictionary & Rules Tab
-        "dict_mode_words": "📚 自定义敏感词库 (Custom Words)",
-        "dict_mode_rules": "🛡️ 白名单与内置规则开关 (Allowlist & Rules)",
+        "dict_mode_words": "📚 自定义词库",
+        "dict_mode_rules": "🛡️ 白名单与规则",
+        "dict_mode_regex": "🧩 自定义正则",
+        "regex_banner_title": "🧩 自定义正则规则（支持 (?P<secret>...) 局部脱敏与 ReDoS 防卡死保护）",
+        "regex_lbl_name": "规则名称：",
+        "regex_lbl_cat": "分类名：",
+        "regex_lbl_tpl": "占位符：",
+        "regex_lbl_pattern": "正则表达式：",
+        "regex_ph_name": "如：internal_order_id",
+        "regex_ph_cat": "如：ORDER_ID",
+        "regex_ph_pattern": "如：ORDER-(?P<secret>\\d{6,10})",
+        "regex_btn_add": "➕ 添加正则",
+        "regex_lbl_test": "🧪 实时测试：",
+        "regex_ph_test": "输入测试文本实时校验语法、ReDoS 安全与脱敏预览...",
+        "regex_test_idle": "输入正则表达式与测试文本以查看实时校验结果",
+        "regex_test_ok": "✅ 校验通过（{ms}ms）· 命中 {cnt} 处{grp} · 预览：{preview}",
+        "regex_test_partial": "（局部捕获组）",
+        "regex_empty": "尚未添加自定义正则规则。可使用 (?P<secret>...) 仅脱敏捕获组内的机密片段。",
+        "msg_regex_added": "✅ 已添加自定义正则规则：[{cat}] {name}",
+        "msg_regex_removed": "🗑️ 已移除自定义正则规则",
+        "msg_regex_err": "❌ 正则校验失败：{err}",
         "dict_banner_title": "💡 进阶选填：个人专属名词词库（不填也不影响软件正常使用）",
-        "dict_banner_desc": "软件已自动拦截所有密钥、密码、IP、路径、+60 电话与 NRIC。仅当您希望隐藏特定公司名 / 客户名 / 项目代号时在此添加。",
+        "dict_banner_desc": "软件已自动拦截各类密钥、密码、IP、路径、手机号、证件号与银行卡。仅当您希望隐藏特定公司名 / 客户名 / 项目代号时在此添加。",
         "lbl_add_cat": "分类：",
         "placeholder_add_word": "输入公司名/客户名（支持用逗号 , 分隔批量添加多个词，回车保存）...",
         "btn_add_word": "➕ 添加词条",
@@ -143,7 +195,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "cat_client": "🤝 客户名称 (CLIENT)",
         "cat_project": "🚀 项目代号 (PROJECT)",
         "cat_secret": "🔑 其他机密 (CUSTOM_SECRET)",
-        "allowlist_title": "🏳️ 免脱敏白名单 (Allowlist —— 列表中的值将跳过脱敏)",
+        "allowlist_title": "🏳️ 免脱敏白名单（放行普通词、公司名、测试 IP 等）",
         "placeholder_allowlist": "输入无需脱敏的白名单项（如 127.0.0.1, localhost）...",
         "btn_add_allowlist": "➕ 加入白名单",
         "rules_toggle_title": "⚙️ 内置高强度规则开关（支持场景预设与搜索）",
@@ -205,36 +257,39 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "notify_startup_off": "⏹️ 已关闭开机自动启动",
         "notify_startup_err": "❌ 修改开机自动启动设置失败",
         "notify_vault_cleared": "🧹 已清空当前内存映射表（共释放 {count} 条记录）",
-        # Tutorial Content
-        "tutorial_body": """🛡️ 欢迎使用 Sanitizer —— 零门槛极速指南
+        # Tutorial Content & Quick Guide Cards (concise & scannable)
+        "guide_step1_t": "① 复制原始代码/日志",
+        "guide_step1_d": "按 Ctrl + C 复制内容",
+        "guide_step2_t": "② 一键瞬间脱敏",
+        "guide_step2_d": "按 Alt+S，直接发给 AI",
+        "guide_step3_t": "③ 拿到回复还原",
+        "guide_step3_d": "复制回复按 Alt+R",
+        "guide_faq_show": "💡 常见疑问（点击展开 5 条贴士）",
+        "guide_faq_hide": "🔽 收起常见疑问",
+        "guide_faq_q1": "为什么加了白名单，带 token=/password= 的那行还是被脱敏？",
+        "guide_faq_a1": "白名单适合放行公司名、普通词、测试 IP；带明显密钥前缀或含连续长数字时，系统会再次拦截以防真密钥漏网。想完全跳过可到「白名单与规则」关掉对应规则。",
+        "guide_faq_q2": "把文件或文件夹拖进首页，原文件会被改坏吗？",
+        "guide_faq_a2": "绝不会！软件会在旁边另存一份 *_sanitized 或 *_restored 副本，点击「📂 打开输出目录」即可找到。同批拖入的文件会共用同一套占位符。",
+        "guide_faq_q3": "重启或放很久后，以前的占位符怎么还原不了了？",
+        "guide_faq_a3": "对照表只存在内存里，退出或超时即清空。跨重启使用请先到「实时内存保险箱」点「🔐 加密导出」，重启后再加密导入。",
+        "guide_faq_q4": "巡航模式下按 Alt+R 还原或撤销，会被马上再脱敏吗？",
+        "guide_faq_a4": "不会。软件能识别自己写回的内容（含防 Win+V 保护），直到你下次在别处手动复制新内容才会再次触发。",
+        "guide_faq_q5": "浏览器扩展何时弹出还原按钮？热键提示被占用怎么办？",
+        "guide_faq_a5": "插件只在当前标签页内存记住本页脱敏过的内容，代码块有可还原标签时才会出现还原按钮（按 Esc 可收起）。热键被占直接点旁边的「⚡ 一键修复」。",
+        "tutorial_body": """⚡ 零配置直接用（不用先填词库也能保护）
 
-1. 我需要先填写资料才能用吗？
-   完全不需要！本软件开箱即用（Zero-Config Ready）。
-   内置 38+ 项高强度检测规则与算法校验器，自动帮您拦截：
-   • 各类大模型与云密钥 (OpenAI/Anthropic/AWS/GitHub/Google/Slack/Stripe/JWT/Bearer/HTTP Basic Auth)
-   • 数据库连接串密码（完整支持含 @ 密码）、.env 环境变量、SSH / PEM / PGP 私钥证书块
-   • 内网 IPv4、公网 IPv4（含 .0 网段）、完整及压缩格式 IPv6、MAC 地址、本机路径用户名
-   • 马来西亚手机 (+60 / 01x)、大马 MyKad NRIC、中国大陆 18 位身份证（GB11643 校验）、护照、银行卡（Luhn 校验）与邮箱
+• 开箱即保护：API 密钥、密码、.env/JSON/YAML、私网/公网 IP、邮箱、银行卡、手机号与身份证件全部自动识别。
+• 脱敏 (Alt+S)：复制代码后按 Alt+S，再粘贴给 AI（或打开左侧「⚡ 巡航模式」复制即自动脱敏）。
+• 还原 (Alt+R)：复制 AI 回复后按 Alt+R 瞬间恢复原貌，支持 ChatGPT / Claude / Gemini / Perplexity。
 
-2. 日常配合 ChatGPT / Claude / DeepSeek 怎么用？
-   【标准快捷键模式】
-   ① 复制 (Ctrl + C)：在编辑器或终端复制含机密的代码或日志。
-   ② 脱敏 (Alt + S) ：按一下 Alt + S，剪贴板机密瞬间替换为安全占位符（如 <API_KEY_1>、[DB_PASS_1]）。
-   ③ 粘贴 (Ctrl + V)：直接粘贴给 AI 提问（可开启“附带 AI 防变形指令”提高还原率）。
-   ④ 还原 (Alt + R) ：复制 AI 回复后按 Alt + R，所有占位符无损还原，并自动附加 Win+V 隐私防留痕标记！
+✨ 四个最顺手的小功能
 
-   【懒人自动巡航模式】
-   在左侧状态栏或托盘开启“⚡ 巡航模式”后，托盘盾牌变为翡翠绿，软件约每 0.55 秒尽力自动脱敏。
+1. 误伤一键放行：首页卡片实时预览最近一次脱敏，发现误判点「🏳️ 加入白名单并重跑」立即修正。
+2. 拖文件不改原件：把 .env / .log / 文件夹直接拖入首页，安全另存副本且跨文件标签完全对齐。
+3. 自己加正则：在「词库与规则 → 自定义正则」用 (?P<secret>...) 只遮住关键片段。
+4. 代码不泄密检查：终端运行 python -m src.main --scan . 或 --git-staged，只报位置绝不打印明文密钥。
 
-3. 沙盒与误报处理技巧
-   • 【🧪 脱敏沙盒】默认使用独立隔离保险箱，随便测试不会污染您的全局会话映射。
-   • 看到某项误报？在右侧脱敏结果中**右键点击彩色占位符**即可一键将其加入白名单！
-   • 您也可以在【📚 词库与规则】一键切换「开发运维 / 办公 HR / 极简仅密钥」三套预设。
-
-4. 本地文件与加密保险箱
-   • 首页支持直接选择 `.env` / `.log` / `.json` 文件一键离线脱敏与还原。
-   • 跨天排查故障时，可在【🔐 内存保险箱】使用 AES-256-GCM 口令加密导出映射，次日再安全解密载入。
-""",
+🔒 隐私底线：100% 本地离线零联网；所有真实数据仅在内存中，退出即焚。""",
     },
     "en": {
         "macos_preview_hotkeys": "macOS preview: global hotkeys are disabled; use GUI or menu-bar buttons. No administrator privileges required.",
@@ -273,6 +328,19 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "sidebar_cruise_short": "Cruise Mode",
         "sidebar_idle_label": "⏱️ Auto-Wipe",
         "sidebar_idle_off": "Off",
+        "hk_status_side_ready": "⌨️ Hotkeys Ready",
+        "hk_status_side_conflict": "⚠️ Conflict: {key}",
+        "hk_status_side_disabled": "⌨️ Hotkeys Off",
+        "hk_status_home_ready": "⌨️ Global Hotkeys Ready ({san} / {res})",
+        "hk_status_home_conflict": "⚠️ Hotkey [{key}] is occupied by another app (inactive)",
+        "hk_status_home_disabled": "ℹ️ Global hotkeys are disabled in this platform preview",
+        "hk_status_settings_ready": "✅ OS hotkeys bound & active: {san} | {res}",
+        "hk_status_settings_conflict": "⚠️ Conflict (inactive): [{key}] is occupied by another app (e.g. GPU overlay)",
+        "hk_status_settings_disabled": "ℹ️ Global hotkeys are disabled on macOS preview",
+        "btn_hk_autofix": "🔧 Auto-Fix Conflict",
+        "btn_hk_autofix_short": "🔧 Auto-Fix",
+        "msg_hk_autofix_ok": "✅ Conflict resolved! Bound new hotkeys: Sanitize [{san}] | Restore [{res}]",
+        "msg_hk_autofix_fail": "❌ No free fallback shortcut found; please record another key manually",
         "nav_home": "🏠 Dashboard",
         "nav_sandbox": "🧪 Live Sandbox",
         "nav_dict": "📚 Words & Rules",
@@ -282,22 +350,27 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # Home Dashboard
         "hero_badge": "🟢 Protection Active · Zero-Setup Ready Out of the Box",
         "hero_desc": (
-            "No manual setup required! 38+ built-in detectors automatically mask:\n"
-            "API Keys, Basic/Bearer Auth, DB Passwords (incl. '@'), SSH/PGP Keys, IPv4 & Compressed IPv6,\n"
-            "OS Path Usernames, MY +60 Phones & MyKad NRIC, CN ID (checksum), Passports & Bank Cards."
+            "No manual setup required! 50+ built-in detectors automatically mask:\n"
+            "API Keys (OpenAI/AWS/Cloudflare/Supabase/Vercel/Azure), DB Passwords, SSH/PGP Keys,\n"
+            "IPv4/IPv6, OS Paths, International Phones, National IDs, Passports, Cards & Structured Configs."
         ),
         "btn_hero_sanitize": "🛡️ Sanitize Clipboard Now (Alt + S)",
         "btn_hero_restore": "🔄 Restore Clipboard Now (Alt + R)",
         "btn_hero_undo": "⏪ Undo Sanitize",
-        "stat_intercepted_title": "Protected in Session",
-        "stat_intercepted_unit": "sensitive items",
-        "stat_vault_title": "Active Vault Mappings",
-        "stat_vault_unit": "unique pairs",
-        "stat_rules_title": "Built-in Detectors",
-        "stat_rules_unit": "active rules",
+        "stat_intercepted_title": "Protected",
+        "stat_intercepted_unit": "hits",
+        "stat_intercepted_hint": "Session hits · View ↗",
+        "stat_vault_title": "Active Mappings",
+        "stat_vault_unit": "saved",
+        "stat_vault_hint": "In RAM · Manage ↗",
+        "stat_rules_title": "Auto-Protections",
+        "stat_rules_unit": "active",
+        "stat_rules_hint": "Keys/IDs/IPs · List ↗",
         "switches_section_title": "⚡ Protection Modes (Instant Toggle)",
         "sw_cruise_title": "⚡ Auto-Sanitize on Copy (Cruise Mode)",
-        "sw_cruise_desc": "Best-effort checks about every 0.55s (1,500,000-character limit); review before pasting",
+        "sw_cruise_desc": "Instant Windows clipboard event listener (zero polling); 0.55s fallback elsewhere. Always review before pasting",
+        "sw_entropy_title": "🧬 High-Entropy Random Secret Fallback (Experimental)",
+        "sw_entropy_desc": "Applies only to high-entropy tokens on assignment RHS (= / :); skips normal prose and UUIDs",
         "sw_semantic_title": "🌐 Semantic Disguise Mode (192.0.2.x / user1@example.com)",
         "sw_semantic_desc": "Replace real IPs, emails, and paths with RFC 5737 / valid test formats so AI parses configs cleanly",
         "sw_ai_hint_title": "🤖 Prepend AI Preservation Hint (Higher Restore Rate)",
@@ -313,10 +386,25 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "lbl_idle_wipe": "⏱️ Auto-Wipe Session Vault After Inactivity:",
         "idle_wipe_off": "Off (Clear on exit only)",
         "idle_wipe_min": "{m} min",
-        "file_drop_title": "📄 Local File Sanitize / Restore",
-        "file_drop_desc": "Supports .env / .log / .json / .yaml / .csv / .txt with private atomic export",
+        "file_drop_title": "📄 Drag & Drop File / Folder Batch Sanitize & Restore",
+        "file_drop_desc": "Drop single/multiple files or a whole log folder (.env/.log/.json/.yaml/.csv/.txt). Shared vault, never overwrites originals",
+        "file_drop_zone_hint": "📥 Drag & drop file(s) or a log folder into this window",
+        "file_drop_mode_san": "🛡️ Drop: Sanitize",
+        "file_drop_mode_res": "🔄 Drop: Restore",
         "btn_sanitize_file": "📄 Sanitize File",
         "btn_restore_file": "🔄 Restore File",
+        "btn_batch_folder": "📁 Batch Folder",
+        "btn_open_batch_out": "📂 Open Output",
+        "msg_batch_done": "📁 Batch done: {ok} file(s) ({hits} hits, {skip} skipped) → {dest}",
+        "msg_batch_empty": "ℹ️ No supported text files found in dropped paths",
+        "recent_clip_title": "🔎 Recent Clipboard Sanitize Quick-View",
+        "recent_clip_empty": "No recent clipboard sanitization yet. Press Alt+S or use Cruise Mode to inspect hits and allowlist false positives here.",
+        "recent_clip_reveal": "👁️ Reveal",
+        "btn_allowlist_rerun": "🏳️ Allowlist & Rerun",
+        "msg_allowlist_rerun_ok": "🏳️ Added to allowlist and silently updated clipboard",
+        "msg_allowlist_rerun_clip_changed": "🏳️ Added to allowlist (clipboard changed externally; left untouched)",
+        "recent_src_hotkey": "Hotkey",
+        "recent_src_cruise": "Cruise",
         # Hotkeys & Settings Page
         "hotkey_section_title": "⌨️ Custom Global Hotkeys (Click & press any combo · Esc cancels)",
         "hotkey_section_desc": "Click a shortcut box or Record Key and press any key combo (letters, digits, symbols, arrows, numpad + Ctrl/Alt/Shift/Win, or standalone F1-F24). Applies immediately & syncs Quick Guide:",
@@ -356,10 +444,29 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "sandbox_cat_prefix": "📊 Intercepted:",
         "ctx_allowlist_placeholder": "🏳️ Add Original Value to Allowlist",
         # Dictionary & Rules Tab
-        "dict_mode_words": "📚 Custom Words Dictionary",
-        "dict_mode_rules": "🛡️ Allowlist & Built-in Rule Toggles",
+        "dict_mode_words": "📚 Custom Words",
+        "dict_mode_rules": "🛡️ Rules & Allowlist",
+        "dict_mode_regex": "🧩 Custom Regex",
+        "regex_banner_title": "🧩 Custom Regex Rules (Supports (?P<secret>...) Partial Masking & ReDoS Guard)",
+        "regex_lbl_name": "Rule Name:",
+        "regex_lbl_cat": "Category:",
+        "regex_lbl_tpl": "Tag Format:",
+        "regex_lbl_pattern": "Regex Pattern:",
+        "regex_ph_name": "e.g. internal_order_id",
+        "regex_ph_cat": "e.g. ORDER_ID",
+        "regex_ph_pattern": "e.g. ORDER-(?P<secret>\\d{6,10})",
+        "regex_btn_add": "➕ Add Regex",
+        "regex_lbl_test": "🧪 Live Test:",
+        "regex_ph_test": "Enter sample text to validate syntax, ReDoS safety & preview...",
+        "regex_test_idle": "Enter a regex pattern and sample text for live validation",
+        "regex_test_ok": "✅ Valid ({ms}ms) · {cnt} match(es){grp} · Preview: {preview}",
+        "regex_test_partial": " (partial group)",
+        "regex_empty": "No custom regex rules yet. Use (?P<secret>...) to mask only the secret capture group.",
+        "msg_regex_added": "✅ Added custom regex rule: [{cat}] {name}",
+        "msg_regex_removed": "🗑️ Removed custom regex rule",
+        "msg_regex_err": "❌ Regex validation failed: {err}",
         "dict_banner_title": "💡 Optional Custom Dictionary (Not required for standard protection)",
-        "dict_banner_desc": "API keys, passwords, IPs, paths, +60 phones & NRIC are already masked automatically. Add proprietary Company/Client/Project terms here.",
+        "dict_banner_desc": "API keys, passwords, IPs, paths, phones, national IDs & bank cards are already masked automatically. Add proprietary Company/Client/Project terms here.",
         "lbl_add_cat": "Category:",
         "placeholder_add_word": "Enter company/client name (comma-separated for batch add, press Enter)...",
         "btn_add_word": "➕ Add Word",
@@ -374,7 +481,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "cat_client": "🤝 Client (CLIENT)",
         "cat_project": "🚀 Project (PROJECT)",
         "cat_secret": "🔑 Custom Secret (CUSTOM_SECRET)",
-        "allowlist_title": "🏳️ Allowlist (Values here will NEVER be sanitized)",
+        "allowlist_title": "🏳️ Allowlist (Skip common words, company names, test IPs)",
         "placeholder_allowlist": "Enter safe value to ignore (e.g. 127.0.0.1, localhost)...",
         "btn_add_allowlist": "➕ Add Allowlist",
         "rules_toggle_title": "⚙️ Built-in Detectors (Presets & Search)",
@@ -436,36 +543,39 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "notify_startup_off": "⏹️ Windows Startup auto-launch disabled",
         "notify_startup_err": "❌ Failed to update Windows Startup setting",
         "notify_vault_cleared": "🧹 Cleared Session Vault ({count} mappings released)",
-        # Tutorial Content
-        "tutorial_body": """🛡️ Welcome to Sanitizer — Quick Start Guide
+        # Tutorial Content & Quick Guide Cards (concise & scannable)
+        "guide_step1_t": "① Copy Text",
+        "guide_step1_d": "Ctrl + C to copy code",
+        "guide_step2_t": "② Sanitize Fast",
+        "guide_step2_d": "Press Alt+S, paste to AI",
+        "guide_step3_t": "③ Restore Reply",
+        "guide_step3_d": "Copy reply, press Alt+R",
+        "guide_faq_show": "💡 Quick FAQ (Click to Expand 5 Tips)",
+        "guide_faq_hide": "🔽 Hide Quick FAQ",
+        "guide_faq_q1": "Why did an allowlisted value still get masked after token= / password=?",
+        "guide_faq_a1": "Allowlist is best for company names, words, or test IPs. If preceded by token=/password= or containing long phone-like digits, other rules still guard it—toggle that rule in Rules & Allowlist if needed.",
+        "guide_faq_q2": "Does Drag & Drop modify my original files?",
+        "guide_faq_a2": "Never. Safe *_sanitized or *_restored copies are saved beside your originals (click Open Output to view). Files in one batch share the same placeholder tags.",
+        "guide_faq_q3": "Why won't old tags restore after restarting or an idle timeout?",
+        "guide_faq_a3": "Mappings live strictly in RAM and wipe on exit or timeout. Use Encrypted Export/Import in Live Vault before rebooting to keep a long session.",
+        "guide_faq_q4": "In Cruise Mode, will Alt+R (Restore) or Undo get re-sanitized immediately?",
+        "guide_faq_a4": "No. The app recognizes its own restore/undo writes (with Win+V history protection) and waits for your next manual copy.",
+        "guide_faq_q5": "When does the extension's Restore pill appear, and how to fix Hotkey Conflicts?",
+        "guide_faq_a5": "Each browser tab holds its own RAM mappings—the pill appears only for tags masked in that tab (Esc hides it). For busy hotkeys, click Auto-Fix.",
+        "tutorial_body": """⚡ Zero-Config Out of the Box
 
-1. Do I need to fill in any forms before using it?
-   NO! The app works 100% out of the box with zero configuration.
-   38+ built-in high-precision detectors automatically protect:
-   • AI & Cloud API Keys (OpenAI/Anthropic/AWS/GitHub/Google/Slack/Stripe/JWT/Bearer/HTTP Basic Auth)
-   • DB Connection Passwords (supports '@' inside passwords), .env Secrets, SSH / PEM / PGP Private Keys
-   • Private & Public IPv4 (incl. .0 subnets), Full & Compressed IPv6, MAC Addresses, OS Path Usernames
-   • MY Phones (+60 / 01x), MyKad NRIC, CN 18-digit ID (checksum), Passports, Bank Cards (Luhn) & Emails
+• Protected automatically: Cloud/AI API keys, passwords, .env/JSON/YAML, IPs, emails, bank cards, phones & national IDs.
+• Send to AI: Copy code/logs and press Alt+S (or toggle ⚡ Cruise Mode to auto-sanitize on copy).
+• Get originals back: Copy AI's reply and press Alt+R — works cleanly with ChatGPT, Claude, Gemini & Perplexity.
 
-2. How do I use it with ChatGPT / Claude / DeepSeek?
-   [Standard Hotkey Mode]
-   ① Copy (Ctrl + C)   : Copy sensitive code or logs from your IDE or terminal.
-   ② Sanitize (Alt + S): Press Alt + S. Secrets become safe tags (e.g. <API_KEY_1>, [DB_PASS_1]).
-   ③ Paste (Ctrl + V)  : Paste directly into ChatGPT or Claude (optionally enable AI Preservation Hint).
-   ④ Restore (Alt + R) : Copy the AI's response and press Alt + R — original values recover cleanly with Win+V history protection!
+✨ 4 Handy Features You'll Actually Use
 
-   [Effortless Cruise Mode]
-   Toggle "⚡ Cruise Mode" in the sidebar or tray — the shield turns green and best-effort auto-sanitizes copies.
+1. One-Click False-Positive Fix: Review hits on Home; click 🏳️ Allowlist & Rerun to unmask immediately.
+2. Safe File/Folder Drop: Drop .env / .log / folders onto Home to create safe copies without touching originals.
+3. Custom Regex Rules: Add pattern rules with (?P<secret>...) in Dictionary & Rules to mask only secret parts.
+4. Pre-Commit Secret Scan: Run python -m src.main --scan . or --git-staged in terminal (never prints raw keys).
 
-3. Sandbox & One-Click Allowlist
-   • [🧪 Live Sandbox] runs in an isolated vault by default so typing tests never pollute your live session.
-   • Spot a false positive? Right-click any colored placeholder in the Sandbox output to Allowlist it instantly!
-   • Switch between DevOps, Office/HR, and Keys-Only presets in [📚 Words & Rules].
-
-4. Local Files & Encrypted Vault
-   • Sanitize or restore local .env / .log / .json files right from the Dashboard.
-   • For multi-day investigations, export/import your Session Vault with AES-256-GCM passphrase encryption.
-""",
+🔒 Privacy Promise: 100% offline with zero network calls; mappings live only in RAM until exit.""",
     },
 }
 

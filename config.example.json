@@ -8,6 +8,7 @@
   "idle_wipe_minutes": 30,
   "hud_enabled": true,
   "clipboard_privacy_guard": true,
+  "entropy_detection_enabled": false,
   "hotkeys": {
     "sanitize": "alt+s",
     "restore": "alt+r"
@@ -19,6 +20,7 @@
     "example.com"
   ],
   "disabled_rules": [],
+  "custom_regex_rules": [],
   "custom_dictionary": {
     "COMPANY": [
       "Acme Global Technologies Sdn Bhd",

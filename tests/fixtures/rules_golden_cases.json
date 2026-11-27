@@ -72,6 +72,56 @@
       "input": "MY: +60 3-2145 6789 SG: +65 9123 4567",
       "must_not_contain": ["+60 3-2145 6789", "+65 9123 4567"],
       "must_contain": ["[PHONE_1]", "[PHONE_2]"]
+    },
+    {
+      "name": "cloudflare_supabase_vercel_linear_stripe_databricks_telegram",
+      "input_parts": [
+        "CF=cfut_AbCdEfGhIjKlMnOpQrStUvWxYz123456 ",
+        "SB=sb_secret_AbCdEfGhIjKlMnOpQrStUvWx ",
+        "VC=vercel_pat_AbCdEfGhIjKlMnOpQrStUvWx ",
+        "LIN=lin_api", "_1234567890abcdefABCDEF1234567890abcd ",
+        "WH=whsec_1234567890abcdefABCDEF1234 ",
+        "DBX=dapi", "0123456789abcdef0123456789abcdef ",
+        "TG=123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+      ],
+      "must_not_contain": [
+        "cfut_AbCdEfGhIjKlMnOpQrStUvWxYz123456",
+        "sb_secret_AbCdEfGhIjKlMnOpQrStUvWx",
+        "vercel_pat_AbCdEfGhIjKlMnOpQrStUvWx",
+        "whsec_1234567890abcdefABCDEF1234",
+        "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+      ],
+      "must_not_contain_parts": [
+        ["lin_api", "_1234567890abcdefABCDEF1234567890abcd"],
+        ["dapi", "0123456789abcdef0123456789abcdef"]
+      ],
+      "must_contain": ["<API_KEY_1>", "<API_KEY_7>"]
+    },
+    {
+      "name": "azure_connection_string_and_sas_signature",
+      "input": "DefaultEndpointsProtocol=https;AccountName=prodacct;AccountKey=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789==;EndpointSuffix=core.windows.net\nSAS=https://acct.blob.core.windows.net/logs?sv=2022-11-02&sig=AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "must_not_contain": [
+        "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789==",
+        "AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+      ],
+      "must_contain": [
+        "AccountKey=<API_KEY_1>;",
+        "&sig=<API_KEY_2>"
+      ]
+    },
+    {
+      "name": "structured_env_json_yaml_secrets",
+      "input": "export SUPABASE_SERVICE_ROLE_KEY=my_supabase_role_secret_9988\n{\"signing_secret\": \"wh_custom_sign_112233\"}\nx-api-key: prod_header_secret_4455",
+      "must_not_contain": [
+        "my_supabase_role_secret_9988",
+        "wh_custom_sign_112233",
+        "prod_header_secret_4455"
+      ],
+      "must_contain": [
+        "SUPABASE_SERVICE_ROLE_KEY=<API_KEY_",
+        "\"signing_secret\": \"<API_KEY_",
+        "x-api-key: <API_KEY_"
+      ]
     }
   ]
 }

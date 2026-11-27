@@ -8,6 +8,7 @@ import customtkinter as ctk
 import pytest
 
 from src.gui import _ModernControlCenter, _StableCTk
+from src.main import LastClipboardSanitizeRecord
 from src.sanitizer import PrivacySanitizer
 
 
@@ -77,7 +78,25 @@ def test_all_pages_fit_without_clipping_across_sizes(tmp_path: Path, lang: str, 
     root.geometry(f"{w_px}x{h_px}+20000+20000")
     root.deiconify()
     try:
-        win = _ModernControlCenter(root, sanitizer)
+        conflict_status = {
+            "state": "conflict",
+            "conflict_key": "alt+s",
+            "bound": {},
+            "configured": {"sanitize": "alt+s", "restore": "ctrl+shift+r"},
+        }
+        sample_recent = LastClipboardSanitizeRecord(
+            raw_text="Cloudflare CF_TOKEN=cf_test_token_alpha_1234567890abcd",
+            sanitized_text="Cloudflare CF_TOKEN=[CLOUDFLARE_TOKEN_1]",
+            source="hotkey",
+            total_count=1,
+            items=[("[CLOUDFLARE_TOKEN_1]", "cf_test_token_alpha_1234567890abcd", "CLOUDFLARE_TOKEN")],
+        )
+        win = _ModernControlCenter(
+            root,
+            sanitizer,
+            get_hotkey_status=lambda: conflict_status,
+            get_last_clipboard_record=lambda: sample_recent,
+        )
         root.update()
         for page_key in ("home", "sandbox", "dict", "vault", "settings", "guide"):
             win._show_page(page_key)
@@ -86,6 +105,8 @@ def test_all_pages_fit_without_clipping_across_sizes(tmp_path: Path, lang: str, 
                 _assert_no_clipped_controls(root, win.page_container, f"{lang}-{w_px}x{h_px}-dict-words")
                 win._show_dict_submode("rules")
                 _assert_no_clipped_controls(root, win.page_container, f"{lang}-{w_px}x{h_px}-dict-rules")
+                win._show_dict_submode("regex")
+                _assert_no_clipped_controls(root, win.page_container, f"{lang}-{w_px}x{h_px}-dict-regex")
             else:
                 _assert_no_clipped_controls(root, win.page_container, f"{lang}-{w_px}x{h_px}-{page_key}")
             # Also verify footer never clips

@@ -392,14 +392,16 @@ test('shared cross-platform golden rules fixture passes identically in Web engin
   for (const item of golden.cases) {
     const web = loadWeb();
     web.customDict = {};
-    const san = web.sanitizeText(item.input);
-    for (const forbidden of (item.must_not_contain || [])) {
+    const rawInput = item.input_parts ? item.input_parts.join('') : item.input;
+    const forbiddenList = (item.must_not_contain || []).concat((item.must_not_contain_parts || []).map(p => p.join('')));
+    const san = web.sanitizeText(rawInput);
+    for (const forbidden of forbiddenList) {
       assert(!san.text.includes(forbidden), `${item.name}: leaked ${forbidden} in ${san.text}`);
     }
     for (const required of (item.must_contain || [])) {
       assert(san.text.includes(required), `${item.name}: missing ${required} in ${san.text}`);
     }
-    assert.equal(web.restoreText(san.text).text, item.input, `${item.name}: roundtrip failed`);
+    assert.equal(web.restoreText(san.text).text, rawInput, `${item.name}: roundtrip failed`);
   }
 });
 

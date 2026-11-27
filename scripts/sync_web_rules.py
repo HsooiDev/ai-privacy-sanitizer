@@ -1,4 +1,4 @@
-"""Verify cross-platform rule parity between Python (src/rules.py) and Web (web/index.html)."""
+"""Verify cross-platform rule parity across Python (src/rules.py), Web (web/index.html), and Browser Extension (browser-extension/sanitizer_core.js)."""
 
 import argparse
 import json
@@ -16,6 +16,20 @@ from src.sanitizer import PrivacySanitizer
 
 GOLDEN_PATH = REPO_ROOT / "tests" / "fixtures" / "rules_golden_cases.json"
 WEB_PATH = REPO_ROOT / "web" / "index.html"
+EXT_CORE_PATH = REPO_ROOT / "browser-extension" / "sanitizer_core.js"
+
+
+def _resolve_case_input(case: dict) -> str:
+    if "input_parts" in case:
+        return "".join(case["input_parts"])
+    return case["input"]
+
+
+def _resolve_case_forbidden(case: dict) -> list[str]:
+    out = list(case.get("must_not_contain", []))
+    for parts in case.get("must_not_contain_parts", []):
+        out.append("".join(parts))
+    return out
 
 
 def verify_python_cases(cases: list) -> list[str]:
@@ -26,10 +40,10 @@ def verify_python_cases(cases: list) -> list[str]:
         ex.write_text(json.dumps({"language": "en", "custom_dictionary": {}}), encoding="utf-8")
         for case in cases:
             sanitizer = PrivacySanitizer(cfg, ex)
-            raw = case["input"]
+            raw = _resolve_case_input(case)
             san = sanitizer.sanitize(raw)
             restored = sanitizer.restore(san.sanitized_text)
-            for forbidden in case.get("must_not_contain", []):
+            for forbidden in _resolve_case_forbidden(case):
                 if forbidden in san.sanitized_text:
                     errors.append(f"[Python] {case['name']}: leaked {forbidden!r} in {san.sanitized_text!r}")
             for required in case.get("must_contain", []):
@@ -76,15 +90,17 @@ function makeWeb() {
 const errors = [];
 for (const c of cases) {
   const web = makeWeb();
-  const san = web.sanitizeText(c.input);
+  const rawInput = c.input_parts ? c.input_parts.join('') : c.input;
+  const forbiddenList = (c.must_not_contain || []).concat((c.must_not_contain_parts || []).map(p => p.join('')));
+  const san = web.sanitizeText(rawInput);
   const res = web.restoreText(san.text);
-  for (const forbidden of (c.must_not_contain || [])) {
+  for (const forbidden of forbiddenList) {
     if (san.text.includes(forbidden)) errors.push(`[Web] ${c.name}: leaked ${JSON.stringify(forbidden)} in ${JSON.stringify(san.text)}`);
   }
   for (const required of (c.must_contain || [])) {
     if (!san.text.includes(required)) errors.push(`[Web] ${c.name}: missing ${JSON.stringify(required)} in ${JSON.stringify(san.text)}`);
   }
-  if (res.text !== c.input) errors.push(`[Web] ${c.name}: roundtrip mismatch`);
+  if (res.text !== rawInput) errors.push(`[Web] ${c.name}: roundtrip mismatch`);
 }
 process.stdout.write(JSON.stringify(errors));
 """
@@ -98,18 +114,56 @@ process.stdout.write(JSON.stringify(errors));
     return json.loads(proc.stdout)
 
 
+def verify_extension_cases(cases: list) -> list[str]:
+    node_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.argv[1], 'utf8');
+const cases = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).cases;
+
+const ctx = vm.createContext({ globalThis: {} });
+ctx.globalThis = ctx;
+vm.runInContext(code, ctx, { timeout: 2000 });
+
+const errors = [];
+for (const c of cases) {
+  const eng = ctx.SanitizerExtCore.createSessionEngine();
+  const rawInput = c.input_parts ? c.input_parts.join('') : c.input;
+  const forbiddenList = (c.must_not_contain || []).concat((c.must_not_contain_parts || []).map(p => p.join('')));
+  const san = eng.sanitize(rawInput);
+  const res = eng.restore(san.text);
+  for (const forbidden of forbiddenList) {
+    if (san.text.includes(forbidden)) errors.push(`[Extension] ${c.name}: leaked ${JSON.stringify(forbidden)} in ${JSON.stringify(san.text)}`);
+  }
+  for (const required of (c.must_contain || [])) {
+    if (!san.text.includes(required)) errors.push(`[Extension] ${c.name}: missing ${JSON.stringify(required)} in ${JSON.stringify(san.text)}`);
+  }
+  if (res.text !== rawInput) errors.push(`[Extension] ${c.name}: roundtrip mismatch`);
+}
+process.stdout.write(JSON.stringify(errors));
+"""
+    proc = subprocess.run(
+        ["node", "-e", node_script, str(EXT_CORE_PATH), str(GOLDEN_PATH)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+    return json.loads(proc.stdout)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify Python & Web rule parity against shared golden cases.")
+    parser = argparse.ArgumentParser(description="Verify Python, Web, and Extension rule parity against shared golden cases.")
     parser.add_argument("--check", action="store_true", help="Exit nonzero if any rule parity drift is detected.")
     parser.parse_args()
 
     cases = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))["cases"]
-    errors = verify_python_cases(cases) + verify_web_cases(cases)
+    errors = verify_python_cases(cases) + verify_web_cases(cases) + verify_extension_cases(cases)
     if errors:
         for err in errors:
             sys.stderr.write(f"FAIL: {err}\n")
         return 1
-    sys.stdout.write(f"OK: {len(cases)} cross-platform golden cases verified identically in Python and Web.\n")
+    sys.stdout.write(f"OK: {len(cases)} cross-platform golden cases verified identically across Python, Web, and Browser Extension.\n")
     return 0
 
 

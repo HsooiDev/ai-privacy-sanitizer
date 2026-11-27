@@ -1,0 +1,30 @@
+{
+  "version": "0.6.0",
+  "description": "100% local, zero-network clipboard, file, and browser privacy sanitizer & restorer for AI workflows.",
+  "homepage": "https://github.com/HsooiDev/ai-privacy-sanitizer",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/HsooiDev/ai-privacy-sanitizer/releases/download/v0.6.0/Sanitizer.exe",
+      "hash": "REPLACE_WITH_RELEASE_SHA256"
+    }
+  },
+  "bin": "Sanitizer.exe",
+  "shortcuts": [
+    [
+      "Sanitizer.exe",
+      "AI Privacy Sanitizer"
+    ]
+  ],
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/HsooiDev/ai-privacy-sanitizer/releases/download/v$version/Sanitizer.exe"
+      }
+    },
+    "hash": {
+      "url": "$baseurl/SHA256SUMS"
+    }
+  }
+}
