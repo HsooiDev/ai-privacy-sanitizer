@@ -33,16 +33,16 @@ When debugging production incidents, reviewing code, or analyzing server logs wi
 ## ✨ Key Features (`v0.5.0`)
 
 ### 1. 🖥️ Sidebar Visual Control Center (`src/gui.py` & `src/hud.py`)
-- **🧭 6-Page Sidebar Navigation**: Fixed 220px left rail (Dashboard / Sandbox / Dictionary & Rules / Session Vault / Settings & Hotkeys / Guide) with live protection badge, quick Cruise toggle, idle auto-wipe countdown, and zero-flicker in-place Theme & EN/ZH switching.
+- **🧭 6-Page Sidebar Navigation**: Responsive layout across window sizes & DPI (Dashboard / Live Sandbox / Words & Rules / Session Vault / Hotkeys & Safety / Quick Guide) with live protection status, quick Cruise toggle, idle countdown, and zero-flicker in-place Theme & EN/ZH switching.
 - **🏠 Dashboard & Local File Sanitize/Restore**: Live KPI cards (Intercepted Hits / Active Mappings / Active Rules `active/total`), one-click **📄 Local File Sanitize / Restore** (`.env`, `.log`, `.json`, `.yaml`, `.csv` with private atomic writes), **⏪ Undo Last Sanitize**, and **🤖 AI Prompt Preservation Hint** (automatically stripped on restore).
 - **🧪 Isolated Sandbox + 5-Tier Risk Colors + Right-Click Allowlist**: Uses an isolated `SessionVault` by default so test snippets never pollute your clipboard vault (with one-click sync to Global Vault); highlights tags across 5 risk tiers (Red=Keys, Amber=DB/Passwords, Blue=Network/Paths, Purple=PII, Green=Business); **right-click any placeholder to add its original value to the Allowlist and re-run instantly**.
-- **📚 Custom Dictionary + Scenario Rule Presets (`Dev Debugging` / `HR & Compliance` / `Strict Full`)**: Searchable human-friendly rule labels & examples, ASCII whole-word toggle, dictionary-only config import, and an upgraded in-app JSON editor with Format JSON and line/col syntax error reporting.
+- **📚 Custom Dictionary + Scenario Rule Presets (`DevOps Recommended` / `Office / HR Full` / `Keys Only`)**: Searchable human-friendly rule labels & examples, ASCII whole-word toggle, dictionary-only config import, and an upgraded in-app JSON editor with Format JSON and line/col syntax error reporting.
 - **🔐 Live RAM Vault + AES-256-GCM Encrypted Export (`src/vault_crypto.py`)**: Debounced search, paginated rendering (60 rows/page), per-row removal, anti-shoulder-surfing masking, and **Scrypt + AES-256-GCM** encrypted export/import.
 - **🛡️ OS-Level Privacy & UX (`src/clipboard_privacy.py` & `src/hud.py`)**:
-  - **Dynamic Tray Icon States** (Blue Ready / Emerald Cruise / Amber Active Vault) + non-focus-stealing bottom-right **Floating Micro-HUD**.
+  - **Dynamic Tray Icon States** (Blue Ready / Emerald Cruise / Amber Active Vault) + high-DPI, multi-monitor-aware non-focus-stealing bottom-right **Floating Micro-HUD**.
   - **Clipboard History Privacy Guard**: Marks restored/undone secrets on Windows with `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory=0`, and `CanUploadToCloudClipboard=0` (and `ConcealedType`/`TransientType` on macOS).
   - **Desktop Idle Auto-Wipe**: Automatically clears RAM vault & undo snapshots after 5/10/15/30/60 minutes of inactivity.
-  - **Safe Hotkey Recorder**: Two-row zero-overflow layout; pressing `Esc` cancels recording cleanly, and bare unmodified keys (`a`, `space`, etc.) are rejected.
+  - **IDE-Style Instant Keybinding Recorder**: Click and press any combo (letters, digits, symbols, arrows, numpad + `Ctrl`/`Alt`/`Shift`/`Win`, or standalone `F1`–`F24`) or edit inline via `✏️` → `✓`; applies immediately, syncs the Quick Guide & Dashboard live, reports exact conflicting shortcuts, and automatically falls back from `Alt+R` if occupied by GPU overlays.
 
 ### 2. 🧠 High-Performance Two-Layer Engine (`src/sanitizer.py` & `src/rules.py`)
 - **47 Built-in Precision Detectors + C-Level Prefilters**: Zero-backtracking boundary anchors, `fast_tokens` prefiltering, and lazy sentinel span caching — processes a 500KB log in ~0.7s and rejects unclosed 500KB PEM blocks in ~0.22s with zero ReDoS risk.
@@ -69,10 +69,20 @@ flowchart TD
 
 ## 🚀 Getting Started
 
-### Option 1: Standalone Windows Executable (Windows Users)
-1. Download [Sanitizer.exe](Sanitizer.exe), [SHA256SUMS](SHA256SUMS), and [build-info.json](build-info.json) from the same release revision and verify with `Get-FileHash .\Sanitizer.exe -Algorithm SHA256`. *(Note: editing source files does not rebuild the checked-in `Sanitizer.exe`; build on Windows via PyInstaller or push a release tag to trigger Windows CI for a fresh `v0.5.0` EXE.)*
-2. On first launch, the **Sidebar Control Center** opens and places a dynamic shield icon in the Windows system tray.
-3. Windows EXE settings are stored privately in `%LOCALAPPDATA%\Sanitizer\config.json` (separate from synced folders).
+### Option 1: Download & Open Standalone Windows `.exe` (Recommended)
+1. **Download & Verify**: Download `Sanitizer.exe`, `SHA256SUMS`, and `build-info.json` from [GitHub Releases](https://github.com/HsooiDev/ai-privacy-sanitizer/releases) into a local folder (e.g., `D:\Tools\Sanitizer\Sanitizer.exe`, ideally outside OneDrive/cloud-synced folders). Verify integrity in PowerShell:
+   ```powershell
+   Get-FileHash .\Sanitizer.exe -Algorithm SHA256
+   ```
+2. **First Launch**: **Double-click** `Sanitizer.exe` in Windows File Explorer. On first launch, the **Sidebar Control Center** opens and places a dynamic shield icon in the system tray (closing the window with `×` minimizes to the tray to keep protecting your clipboard; use **Exit** in the tray menu to quit completely). If `Alt+R` is already taken by GPU overlays, startup automatically falls back to `Ctrl+Shift+R`.
+3. **If Windows Security Prompts or Blocks the `.exe`**:
+   - **Case A — Windows Defender SmartScreen ("Windows protected your PC")**:
+     Because this open-source binary is not signed with a paid EV certificate, Windows may show a blue prompt on first run. Click **`More info`** → **`Run anyway`** to launch normally.
+   - **Case B — Windows 11 Smart App Control / WDAC Policy Blocks Execution**:
+     On systems enforcing strict unsigned-executable blocking (Smart App Control), Windows will refuse to start unsigned `.exe` binaries. You do **not** need to disable system security — simply use one of these clean alternatives:
+     - **Run via Official Python (Recommended desktop alternative)**: Follow **Option 2** below and run `python -m src.main` to get the full desktop GUI, tray icon, and global hotkeys;
+     - **Zero-install Browser Options**: Open `web/index.html` directly (**Option 3**) or load the extension in `browser-extension/` (**Option 4**).
+4. **Private Config Location**: Windows `.exe` settings are stored separately in `%LOCALAPPDATA%\Sanitizer\config.json` so moving or upgrading the binary never loses your rules.
 
 ### Option 2: Run from Source / CLI Pipeline / Build `.exe` (Developers)
 
@@ -98,7 +108,7 @@ python -m src.main
 
 # 5. Export multi-resolution icon & package standalone .exe (UPX disabled to reduce AV false positives)
 python -m src.main --export-ico assets/icon.ico
-pyinstaller --noconfirm AI-Privacy-Sanitizer.spec
+python -m PyInstaller --noconfirm AI-Privacy-Sanitizer.spec
 ```
 
 ### Option 3: Pure In-Memory Web Edition
@@ -117,6 +127,33 @@ source .venv/bin/activate
 python -m pip install --require-hashes -r requirements-macos-lock.txt
 python scripts/build_macos.py --arch arm64  # use x86_64 on Intel Mac
 ```
+
+---
+
+## 📘 Step-by-Step User Guide
+
+Once the desktop app is open, use the 6 sidebar tabs as follows:
+
+1. **🏠 Overview — Daily Sanitize, Restore & Local Files**
+   - **Daily Clipboard Flow**: Copy code/logs containing secrets (`Ctrl+C`) → press `Alt+S` (the bottom-right Micro-HUD shows how many secrets were masked) → paste the safe placeholders into your AI chat → copy the AI reply and press `Alt+R` (or `Ctrl+Shift+R` if auto-fallback triggered) to restore original values locally. Need the raw pre-sanitized clipboard back? Click **⏪ Undo Last Sanitize**.
+   - **Cruise Mode (Hands-Free Auto-Sanitize)**: Toggle **⚡ Auto-Sanitize on Copy** in the UI or tray menu. The tray icon turns emerald and checks clipboard changes every ~0.55s — always glance at the pasted text before submitting.
+   - **Local File Sanitize / Restore**: Click **📄 Sanitize Local File** on `.env`, `.log`, `.json`, `.yaml`, or `.csv` files to produce a sanitized copy without overwriting your original file, then run **📥 Restore Local File** on the AI-edited output.
+
+2. **🧪 Live Sandbox — Preview Safely & Right-Click Allowlist**
+   - Paste any sample text into **Live Sandbox** to test rules in an isolated temporary vault without polluting your main session mappings (you can promote sandbox mappings to the main vault whenever ready).
+   - Spotted a false positive (such as a release tag or harmless internal ID)? **Right-click that placeholder** in the preview pane to add its raw value to your Allowlist and refresh immediately.
+
+3. **📚 Dictionary & Rules — Custom Terms & Presets**
+   - **Custom Dictionary**: Add company domains, internal service names, client aliases, or test usernames (with optional whole-word matching for English tokens).
+   - **Scenario Presets**: Switch between **Dev & Debug**, **HR & Legal**, and **Strict Full** presets, or toggle individual built-in rules on/off.
+
+4. **🔐 Session Vault — Inspect, Copy Tag & Encrypted Export**
+   - Browse active placeholder-to-secret mappings in RAM (masked with `***` by default for shoulder-surfing protection; search, toggle reveal, click **Copy Tag**, or delete individual rows).
+   - Moving across machines or restarting? Use **Encrypted Export** with a passphrase to save an `AES-256-GCM` encrypted vault file and import it later.
+
+5. **⚙️ Security & Hotkeys — Instant IDE-Style Binding & Auto-Wipe**
+   - **Change Global Hotkeys**: Click any hotkey pill and press your desired combo (for example `Ctrl+Shift+S`) — it saves and registers immediately on release (`Esc` cancels). Prefer typing? Click `✏️`, type the shortcut, and press `Enter` or click the green `✓` to save instantly. Clicking **↺ Reset Default** automatically picks non-conflicting fallbacks if `Alt+R` is occupied by another app.
+   - **Idle Auto-Wipe**: Enable automatic RAM vault clearing after 5–60 minutes of inactivity.
 
 ---
 
@@ -204,7 +241,7 @@ Input, output, vault and configuration paths must be distinct, including aliases
 
 CI and Windows releases install exact direct/transitive versions and upstream artifact SHA-256 hashes from `requirements-lock.txt` using `python -m pip install --require-hashes -r requirements-lock.txt`. `requirements-macos-lock.txt` extends these shared pins with hashed macOS build dependencies; `requirements.txt` keeps source-install compatibility ranges. To update, resolve deliberately in a clean Python 3.11 environment, include Windows-only dependencies, verify the hashes against PyPI, and run only the affected focused checks. Actions use full upstream commit SHAs; review the upstream change before updating each SHA/comment.
 
-Only the tag-push release job receives `contents: write`; PR and test jobs use read access. Release builds include source commit/run metadata and asset checksums. The checked-in `Sanitizer.exe` has separate source-verification and validation records in `build-info.json`. These checksums detect changed downloads; they are not code signing or a guarantee of bit-identical builds across runner images. Check the recorded revision and checksum when comparing an EXE with source.
+Only the tag-push release job receives `contents: write`; PR and test jobs use read access. Release builds include source commit/run metadata (`build-info.json`) and asset checksums (`SHA256SUMS`). These checksums detect changed downloads; they are not code signing or a guarantee of bit-identical builds across runner images. Check the recorded revision and checksum when comparing a downloaded release EXE with source.
 
 ---
 

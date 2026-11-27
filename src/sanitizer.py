@@ -22,8 +22,63 @@ from src.vault_crypto import (
 
 MAX_SANITIZE_CHARS = 1_500_000
 VALID_IDLE_WIPE_MINUTES = (0, 5, 10, 15, 30, 60)
-_VALID_MODIFIERS = frozenset({"alt", "ctrl", "control", "shift", "win", "windows"})
+_MODIFIER_ALIASES: Dict[str, str] = {
+    "ctrl": "ctrl",
+    "control": "ctrl",
+    "alt": "alt",
+    "shift": "shift",
+    "win": "win",
+    "windows": "win",
+    "super": "win",
+    "meta": "win",
+    "cmd": "win",
+    "command": "win",
+}
+_MODIFIER_ORDER = ("ctrl", "alt", "shift", "win")
+_VALID_MODIFIERS = frozenset(_MODIFIER_ALIASES.keys())
 _VALID_FUNCTION_KEY = re.compile(r"^f([1-9]|1[0-9]|2[0-4])$")
+_KEY_ALIASES: Dict[str, str] = {
+    "return": "enter",
+    "page_up": "pageup",
+    "prior": "pageup",
+    "page_down": "pagedown",
+    "next": "pagedown",
+    "caps_lock": "capslock",
+    "num_lock": "numlock",
+    "scroll_lock": "scrolllock",
+    "print_screen": "printscreen",
+    "grave": "`",
+    "backquote": "`",
+    "minus": "-",
+    "equal": "=",
+    "equals": "=",
+    "plus": "=",
+    "bracketleft": "[",
+    "bracketright": "]",
+    "backslash": "\\",
+    "semicolon": ";",
+    "apostrophe": "'",
+    "quote": "'",
+    "comma": ",",
+    "period": ".",
+    "dot": ".",
+    "slash": "/",
+    **{f"numpad{d}": f"num{d}" for d in range(10)},
+    "numpad_add": "num_add",
+    "numpad_subtract": "num_sub",
+    "numpad_multiply": "num_mul",
+    "numpad_divide": "num_div",
+    "numpad_decimal": "num_dec",
+}
+_VALID_NAMED_KEYS = frozenset({
+    "space", "tab", "enter", "backspace", "insert", "delete",
+    "home", "end", "pageup", "pagedown",
+    "left", "up", "right", "down",
+    "capslock", "numlock", "scrolllock", "pause", "printscreen",
+    *(f"num{d}" for d in range(10)),
+    "num_add", "num_sub", "num_mul", "num_div", "num_dec",
+})
+_VALID_PUNCT_KEYS = frozenset("`-=[]\\;',./")
 
 AI_PROMPT_HINTS: Dict[str, str] = {
     "zh": "# [Sanitizer: 请在回复中原样保留脱敏占位符，切勿修改格式]",
@@ -219,8 +274,15 @@ class SessionVault:
                 template=template,
                 semantic_ip_mode=semantic_ip_mode,
             )
+            existing_identities = {
+                _restore_identity(existing_ph) for existing_ph in self._placeholder_to_original
+            }
 
-            while placeholder in self._placeholder_to_original or placeholder == original:
+            while (
+                placeholder in self._placeholder_to_original
+                or _restore_identity(placeholder) in existing_identities
+                or placeholder == original
+            ):
                 idx += 1
                 self._category_counters[category] = idx
                 next_placeholder = self._build_placeholder(
@@ -284,17 +346,25 @@ class SessionVault:
         merged = 0
         payload = other.export_dict()
         with self._lock:
+            used_identities = {_restore_identity(p) for p in self._placeholder_to_original}
             for orig, ph in payload["original_to_placeholder"].items():
                 cat = payload["original_to_category"].get(orig, "CUSTOM_SECRET")
                 if orig in self._original_to_placeholder:
                     continue
-                if ph in self._placeholder_to_original:
-                    # Allocate a fresh placeholder if the slot is already occupied in this vault.
-                    self.get_or_create_placeholder(orig, cat)
+                if ph in self._placeholder_to_original or _restore_identity(ph) in used_identities:
+                    if ph.startswith("<") and ph.endswith(">"):
+                        tpl = "<{category}_{index}>"
+                    elif ph.startswith("{") and ph.endswith("}"):
+                        tpl = "{{{category}_{index}}}"
+                    else:
+                        tpl = "[{category}_{index}]"
+                    new_ph = self.get_or_create_placeholder(orig, cat, template=tpl)
+                    used_identities.add(_restore_identity(new_ph))
                 else:
                     self._original_to_placeholder[orig] = ph
                     self._placeholder_to_original[ph] = orig
                     self._original_to_category[orig] = cat
+                    used_identities.add(_restore_identity(ph))
                     try:
                         idx = self._loaded_placeholder_index(ph, cat)
                         self._category_counters[cat] = max(self._category_counters.get(cat, 0), idx)
@@ -730,12 +800,13 @@ class PrivacySanitizer:
     @staticmethod
     def _validate_single_hotkey(chord: str) -> str:
         cleaned = re.sub(r"\s+", "", str(chord or "").strip().lower())
-        if not cleaned or not re.match(r"^[a-z0-9_+/\-]+$", cleaned):
+        if not cleaned or any(ord(ch) < 32 or ord(ch) > 126 for ch in cleaned):
             raise ValueError("Invalid hotkey format")
         parts = cleaned.split("+")
         if any(not p for p in parts):
             raise ValueError("Invalid hotkey format")
-        key = parts[-1]
+        raw_key = parts[-1]
+        key = _KEY_ALIASES.get(raw_key, raw_key)
         mods = parts[:-1]
         if not mods:
             # Bare single keys (like 'a', 'space', 'esc') hijack typing across the OS.
@@ -745,15 +816,19 @@ class PrivacySanitizer:
             return key
         seen_mods = set()
         for mod in mods:
-            if mod not in _VALID_MODIFIERS:
+            canonical = _MODIFIER_ALIASES.get(mod)
+            if canonical is None:
                 raise ValueError("Unsupported hotkey modifier")
-            canonical = "ctrl" if mod == "control" else ("win" if mod == "windows" else mod)
             if canonical in seen_mods:
                 raise ValueError("Duplicate hotkey modifier")
             seen_mods.add(canonical)
-        if key in _VALID_MODIFIERS:
+        if key in _MODIFIER_ALIASES:
             raise ValueError("Hotkey must include a non-modifier key")
-        return cleaned
+        is_single_valid = len(key) == 1 and (key.isalnum() or key in _VALID_PUNCT_KEYS)
+        if not (is_single_valid or _VALID_FUNCTION_KEY.fullmatch(key) or key in _VALID_NAMED_KEYS):
+            raise ValueError("Unsupported hotkey key")
+        ordered_mods = [m for m in _MODIFIER_ORDER if m in seen_mods]
+        return "+".join(ordered_mods + [key])
 
     @classmethod
     def normalize_hotkeys(cls, sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:

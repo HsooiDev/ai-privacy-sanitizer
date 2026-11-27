@@ -93,7 +93,7 @@ jobs:
 
       - name: Package standalone windowed Sanitizer.exe
         run: |
-          pyinstaller --noconfirm AI-Privacy-Sanitizer.spec
+          python -m PyInstaller --noconfirm AI-Privacy-Sanitizer.spec
 
       - name: Record source revision and asset checksums
         shell: pwsh

@@ -115,6 +115,375 @@ class _PreferenceButton(ctk.CTkButton):
         return super()._on_release(event)
 
 
+_TK_KEYSYM_TO_TOKEN: Dict[str, str] = {
+    "return": "enter",
+    "kp_enter": "enter",
+    "space": "space",
+    "tab": "tab",
+    "backspace": "backspace",
+    "insert": "insert",
+    "delete": "delete",
+    "home": "home",
+    "end": "end",
+    "prior": "pageup",
+    "page_up": "pageup",
+    "next": "pagedown",
+    "page_down": "pagedown",
+    "left": "left",
+    "up": "up",
+    "right": "right",
+    "down": "down",
+    "caps_lock": "capslock",
+    "num_lock": "numlock",
+    "scroll_lock": "scrolllock",
+    "pause": "pause",
+    "print": "printscreen",
+    "grave": "`",
+    "asciitilde": "`",
+    "minus": "-",
+    "underscore": "-",
+    "equal": "=",
+    "plus": "=",
+    "bracketleft": "[",
+    "braceleft": "[",
+    "bracketright": "]",
+    "braceright": "]",
+    "backslash": "\\",
+    "bar": "\\",
+    "semicolon": ";",
+    "colon": ";",
+    "apostrophe": "'",
+    "quotedbl": "'",
+    "comma": ",",
+    "less": ",",
+    "period": ".",
+    "greater": ".",
+    "slash": "/",
+    "question": "/",
+    "exclam": "1",
+    "at": "2",
+    "numbersign": "3",
+    "dollar": "4",
+    "percent": "5",
+    "asciicircum": "6",
+    "ampersand": "7",
+    "asterisk": "8",
+    "parenleft": "9",
+    "parenright": "0",
+    "kp_add": "num_add",
+    "kp_subtract": "num_sub",
+    "kp_multiply": "num_mul",
+    "kp_divide": "num_div",
+    "kp_decimal": "num_dec",
+    **{f"kp_{d}": f"num{d}" for d in range(10)},
+}
+
+_WIN_VK_TO_TOKEN: Dict[int, str] = {
+    0x08: "backspace",
+    0x09: "tab",
+    0x0D: "enter",
+    0x13: "pause",
+    0x14: "capslock",
+    0x20: "space",
+    0x21: "pageup",
+    0x22: "pagedown",
+    0x23: "end",
+    0x24: "home",
+    0x25: "left",
+    0x26: "up",
+    0x27: "right",
+    0x28: "down",
+    0x2C: "printscreen",
+    0x2D: "insert",
+    0x2E: "delete",
+    0x6A: "num_mul",
+    0x6B: "num_add",
+    0x6D: "num_sub",
+    0x6E: "num_dec",
+    0x6F: "num_div",
+    0x90: "numlock",
+    0x91: "scrolllock",
+    0xBA: ";",
+    0xBB: "=",
+    0xBC: ",",
+    0xBD: "-",
+    0xBE: ".",
+    0xBF: "/",
+    0xC0: "`",
+    0xDB: "[",
+    0xDC: "\\",
+    0xDD: "]",
+    0xDE: "'",
+    **{0x30 + d: str(d) for d in range(10)},
+    **{0x41 + i: chr(ord("a") + i) for i in range(26)},
+    **{0x60 + d: f"num{d}" for d in range(10)},
+    **{0x70 + i: f"f{i + 1}" for i in range(24)},
+}
+
+_PURE_MODIFIER_KEYSYMS: Dict[str, str] = {
+    "Control_L": "ctrl",
+    "Control_R": "ctrl",
+    "Alt_L": "alt",
+    "Alt_R": "alt",
+    "Shift_L": "shift",
+    "Shift_R": "shift",
+    "Win_L": "win",
+    "Win_R": "win",
+    "Super_L": "win",
+    "Super_R": "win",
+    "Meta_L": "win",
+    "Meta_R": "win",
+}
+
+_PURE_MODIFIER_VKS: Dict[int, str] = {
+    0x10: "shift",
+    0x11: "ctrl",
+    0x12: "alt",
+    0x5B: "win",
+    0x5C: "win",
+    0xA0: "shift",
+    0xA1: "shift",
+    0xA2: "ctrl",
+    0xA3: "ctrl",
+    0xA4: "alt",
+    0xA5: "alt",
+}
+
+
+def format_hotkey_display(chord: str) -> str:
+    """Format a normalized shortcut chord into spaced uppercase badges (e.g. CTRL + SHIFT + S)."""
+    cleaned = re.sub(r"\s+", "", str(chord or "").strip().lower())
+    if not cleaned:
+        return ""
+    return " + ".join(part.upper() for part in cleaned.split("+") if part)
+
+
+def normalize_tk_key_event(
+    event,
+    *,
+    is_windows: Optional[bool] = None,
+) -> Tuple[List[str], Optional[str], bool]:
+    """Extract (ordered_modifiers, trigger_key_or_none, is_pure_modifier) from a Tk key event."""
+    keysym = str(getattr(event, "keysym", "") or "")
+    keycode = int(getattr(event, "keycode", 0) or 0)
+    state = int(getattr(event, "state", 0) or 0)
+    win_platform = (platform.system() == "Windows") if is_windows is None else bool(is_windows)
+
+    mods_set = set()
+    if state & 0x0004:
+        mods_set.add("ctrl")
+    if state & 0x0001:
+        mods_set.add("shift")
+    if win_platform:
+        # On Windows Tk, 0x0008 is NumLock (Mod1) and 0x20000 is the Alt modifier bit.
+        if state & 0x20000:
+            mods_set.add("alt")
+    else:
+        if state & 0x20000 or state & 0x0008:
+            mods_set.add("alt")
+        if state & 0x0040:
+            mods_set.add("win")
+
+    # On live Windows events, also poll async modifier state so Win / AltGr work reliably.
+    if platform.system() == "Windows" and isinstance(event, tk.Event):
+        try:
+            user32 = ctypes.windll.user32
+            if user32.GetAsyncKeyState(0x11) & 0x8000:
+                mods_set.add("ctrl")
+            if user32.GetAsyncKeyState(0x12) & 0x8000:
+                mods_set.add("alt")
+            if user32.GetAsyncKeyState(0x10) & 0x8000:
+                mods_set.add("shift")
+            if (user32.GetAsyncKeyState(0x5B) & 0x8000) or (user32.GetAsyncKeyState(0x5C) & 0x8000):
+                mods_set.add("win")
+        except Exception:
+            pass
+
+    pure_mod = _PURE_MODIFIER_KEYSYMS.get(keysym) or _PURE_MODIFIER_VKS.get(keycode)
+    if pure_mod is not None:
+        mods_set.add(pure_mod)
+        ordered = [m for m in ("ctrl", "alt", "shift", "win") if m in mods_set]
+        return ordered, None, True
+
+    ordered = [m for m in ("ctrl", "alt", "shift", "win") if m in mods_set]
+    key_lower = keysym.lower()
+
+    token: Optional[str] = None
+    if key_lower in _TK_KEYSYM_TO_TOKEN:
+        token = _TK_KEYSYM_TO_TOKEN[key_lower]
+    elif re.fullmatch(r"f([1-9]|1[0-9]|2[0-4])", key_lower):
+        token = key_lower
+    elif len(key_lower) == 1 and (key_lower.isalnum() or key_lower in "`-=[]\\;',./"):
+        token = key_lower
+    elif keycode in _WIN_VK_TO_TOKEN:
+        token = _WIN_VK_TO_TOKEN[keycode]
+    elif key_lower and key_lower != "??":
+        token = key_lower
+
+    return ordered, token, False
+
+
+class _HotkeyRecorderBox(ctk.CTkFrame):
+    """IDE-style click-to-record shortcut pill with optional inline manual input."""
+
+    def __init__(
+        self,
+        master,
+        *,
+        value: str,
+        font: ctk.CTkFont,
+        listening_text: str,
+        on_start_record: Callable[[], None],
+        on_manual_commit: Callable[[str], None],
+        on_manual_cancel: Callable[[], None],
+        on_edit_state_changed: Optional[Callable[[bool], None]] = None,
+        width: int = 230,
+        height: int = 34,
+    ) -> None:
+        super().__init__(master, width=width, height=height, fg_color="transparent")
+        self.pack_propagate(False)
+        self._value = str(value or "alt+s").strip().lower()
+        self._listening_text = listening_text
+        self._recording = False
+        self._editing = False
+        self._on_manual_commit = on_manual_commit
+        self._on_manual_cancel = on_manual_cancel
+        self._on_edit_state_changed = on_edit_state_changed
+
+        self._normal_fg = ("#f8fafc", "#0f172a")
+        self._normal_hover = ("#e2e8f0", "#1e293b")
+        self._normal_border = ("#cbd5e1", "#475569")
+        self._normal_text = ("#0f172a", "#f8fafc")
+
+        self._rec_fg = ("#eff6ff", "#172554")
+        self._rec_border = ("#2563eb", "#60a5fa")
+        self._rec_text = ("#1d4ed8", "#93c5fd")
+
+        self._pill_btn = ctk.CTkButton(
+            self,
+            text=format_hotkey_display(self._value),
+            font=font,
+            width=width,
+            height=height,
+            corner_radius=8,
+            border_width=1,
+            border_color=self._normal_border,
+            fg_color=self._normal_fg,
+            hover_color=self._normal_hover,
+            text_color=self._normal_text,
+            cursor="hand2",
+            command=on_start_record,
+        )
+        self._pill_btn.pack(fill="both", expand=True)
+
+        self._entry = ctk.CTkEntry(
+            self,
+            width=width,
+            height=height,
+            corner_radius=8,
+            font=font,
+        )
+        self._entry.bind("<Return>", self._handle_entry_return)
+        self._entry.bind("<Escape>", self._handle_entry_escape)
+
+    def get(self) -> str:
+        if self._editing:
+            return self._entry.get().strip().lower()
+        return self._value
+
+    def _notify_edit_state(self, editing: bool) -> None:
+        if self._on_edit_state_changed is not None:
+            try:
+                self._on_edit_state_changed(bool(editing))
+            except Exception:
+                pass
+
+    def set(self, value: str) -> None:
+        self._value = re.sub(r"\s+", "", str(value or "").strip().lower())
+        if self._editing:
+            self._editing = False
+            self._entry.pack_forget()
+            self._pill_btn.pack(fill="both", expand=True)
+            self._move_focus_out_of_entry()
+            self._notify_edit_state(False)
+        if not self._recording:
+            self._pill_btn.configure(text=format_hotkey_display(self._value))
+
+    def set_listening_text(self, listening_text: str) -> None:
+        self._listening_text = listening_text
+        if self._recording:
+            self._pill_btn.configure(text=self._listening_text)
+
+    def set_recording(self, active: bool, preview: str = "") -> None:
+        if self._editing and active:
+            self.finish_manual_edit(commit=False)
+        self._recording = bool(active)
+        if self._recording:
+            self._pill_btn.configure(
+                fg_color=self._rec_fg,
+                hover_color=self._rec_fg,
+                border_width=2,
+                border_color=self._rec_border,
+                text_color=self._rec_text,
+                text=preview or self._listening_text,
+            )
+        else:
+            self._pill_btn.configure(
+                fg_color=self._normal_fg,
+                hover_color=self._normal_hover,
+                border_width=1,
+                border_color=self._normal_border,
+                text_color=self._normal_text,
+                text=format_hotkey_display(self._value),
+            )
+
+    def start_manual_edit(self) -> None:
+        if self._editing:
+            self.finish_manual_edit(commit=False)
+            return
+        self._editing = True
+        self._pill_btn.pack_forget()
+        self._entry.delete(0, "end")
+        self._entry.insert(0, self._value)
+        self._entry.pack(fill="both", expand=True)
+        self._entry.focus_set()
+        self._entry.select_range(0, "end")
+        self._notify_edit_state(True)
+
+    def _move_focus_out_of_entry(self) -> None:
+        try:
+            focus_w = self.focus_get()
+            inner_entry = getattr(self._entry, "_entry", None)
+            if focus_w is not None and (focus_w is self._entry or focus_w is inner_entry):
+                self._pill_btn.focus_set()
+        except Exception:
+            pass
+
+    def finish_manual_edit(self, *, commit: bool) -> None:
+        if not self._editing:
+            return
+        typed = self._entry.get().strip().lower()
+        self._editing = False
+        self._entry.pack_forget()
+        self._pill_btn.pack(fill="both", expand=True)
+        self._move_focus_out_of_entry()
+        if commit and typed:
+            self._value = re.sub(r"\s+", "", typed)
+        self._pill_btn.configure(text=format_hotkey_display(self._value))
+        self._notify_edit_state(False)
+
+    def _handle_entry_return(self, _event=None) -> str:
+        typed = self._entry.get().strip().lower()
+        self.finish_manual_edit(commit=True)
+        self._on_manual_commit(typed)
+        return "break"
+
+    def _handle_entry_escape(self, _event=None) -> str:
+        self.finish_manual_edit(commit=False)
+        self._on_manual_cancel()
+        return "break"
+
+
 class _SidebarNav(ctk.CTkFrame):
     """Vertical sidebar navigation exposing the same in-place relabel contract as CTkSegmentedButton."""
 
@@ -229,6 +598,13 @@ RISK_TAG_STYLES = {
 
 _VAULT_PAGE_SIZE = 60
 
+_DEFAULT_HOTKEY_CANDIDATES: Tuple[Tuple[str, str], ...] = (
+    ("alt+s", "alt+r"),
+    ("alt+s", "ctrl+shift+r"),
+    ("ctrl+shift+s", "ctrl+shift+r"),
+    ("ctrl+alt+s", "ctrl+alt+r"),
+)
+
 
 class GuiController:
     """Thread-safe CustomTkinter GUI manager that hides to tray on close and re-opens on demand."""
@@ -248,6 +624,7 @@ class GuiController:
         on_copy_to_clipboard: Optional[Callable[..., bool]] = None,
         on_state_changed: Optional[Callable[[], None]] = None,
         get_idle_seconds_left: Optional[Callable[[], Optional[int]]] = None,
+        get_last_hotkey_conflict: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         self.sanitizer = sanitizer
         self.icon_factory = icon_factory
@@ -262,6 +639,7 @@ class GuiController:
         self.on_copy_to_clipboard = on_copy_to_clipboard
         self.on_state_changed = on_state_changed
         self.get_idle_seconds_left = get_idle_seconds_left
+        self.get_last_hotkey_conflict = get_last_hotkey_conflict
         self.startup_status: Optional[str] = None
         self._cmd_queue: "queue.Queue[object]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -285,6 +663,10 @@ class GuiController:
     def show_hud(self, title: str, message: str, *, tone: str = "info") -> None:
         """Queue a non-focus-stealing Micro-HUD toast on the main UI thread."""
         self._cmd_queue.put(("HUD", title, message, tone))
+
+    def set_status(self, text: str) -> None:
+        """Queue a footer status update on the main UI thread."""
+        self._cmd_queue.put(("STATUS", text))
 
     def shutdown(self) -> None:
         """Request the CustomTkinter loop to terminate cleanly."""
@@ -318,6 +700,7 @@ class GuiController:
             on_copy_to_clipboard=self.on_copy_to_clipboard,
             on_state_changed=self.on_state_changed,
             get_idle_seconds_left=self.get_idle_seconds_left,
+            get_last_hotkey_conflict=self.get_last_hotkey_conflict,
         )
         if self.startup_status:
             app_win.status_var.set(self.startup_status)
@@ -341,6 +724,9 @@ class GuiController:
                     elif isinstance(cmd, tuple) and cmd and cmd[0] == "HUD":
                         _, h_title, h_msg, h_tone = cmd
                         hud.show(h_title, h_msg, tone=h_tone)
+                    elif isinstance(cmd, tuple) and cmd and cmd[0] == "STATUS":
+                        _, status_text = cmd
+                        app_win.status_var.set(status_text)
                     elif cmd == "QUIT":
                         hud.destroy()
                         root.quit()
@@ -377,6 +763,7 @@ class _ModernControlCenter:
         on_copy_to_clipboard: Optional[Callable[..., bool]] = None,
         on_state_changed: Optional[Callable[[], None]] = None,
         get_idle_seconds_left: Optional[Callable[[], Optional[int]]] = None,
+        get_last_hotkey_conflict: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         self.root = root
         self.sanitizer = sanitizer
@@ -390,6 +777,7 @@ class _ModernControlCenter:
         self.on_copy_to_clipboard = on_copy_to_clipboard
         self.on_state_changed = on_state_changed
         self.get_idle_seconds_left = get_idle_seconds_left
+        self.get_last_hotkey_conflict = get_last_hotkey_conflict
         self._tk_icon = None
         self._json_modal: Optional[ctk.CTkToplevel] = None
         self._about_modal: Optional[ctk.CTkToplevel] = None
@@ -420,6 +808,10 @@ class _ModernControlCenter:
         self._saved_hk_restore: Optional[str] = None
         self._translation_bindings = weakref.WeakKeyDictionary()
         self._sandbox_status_texts: Dict[str, str] = {}
+        self._responsive_wraps: List[tuple] = []
+        self._responsive_mode: Dict[str, str] = {}
+        self._last_layout_logical_w: int = 0
+        self._in_language_toggle: bool = False
 
         self.lang = self.sanitizer.language
         self.theme_mode = self.sanitizer.theme
@@ -437,13 +829,21 @@ class _ModernControlCenter:
             except Exception:
                 pass
 
-        width, height = 980, 670
+        try:
+            win_scale = max(1.0, float(ctk.ScalingTracker.get_window_dpi_scaling(self.root)))
+        except Exception:
+            win_scale = 1.0
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        pos_x = max(20, (screen_w - width) // 2)
-        pos_y = max(20, (screen_h - height) // 2)
+        log_sw = int(screen_w / win_scale) if screen_w > 0 else 1280
+        log_sh = int(screen_h / win_scale) if screen_h > 0 else 800
+        width = min(1040, max(860, log_sw - 80))
+        height = min(690, max(600, log_sh - 100))
+        self._initial_logical_width = width
+        pos_x = max(20, (log_sw - width) // 2)
+        pos_y = max(20, (log_sh - height) // 2)
         self.root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
-        self.root.minsize(860, 600)
+        self.root.minsize(840, 580)
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
@@ -518,14 +918,267 @@ class _ModernControlCenter:
         finally:
             probe.destroy()
 
+    def _register_wrap_label(
+        self,
+        widget: ctk.CTkLabel,
+        width_fn: Callable[[int], int],
+        variants_fn: Optional[Callable[[], List[str]]] = None,
+    ) -> ctk.CTkLabel:
+        """Track a label so its wraplength and bilingual bounds adapt to container width."""
+        self._responsive_wraps.append((widget, width_fn, variants_fn))
+        return widget
+
+    def _on_page_container_configure(self, event: tk.Event) -> None:
+        if getattr(self, "_in_language_toggle", False):
+            return
+        raw_w = int(getattr(event, "width", 0) or 0)
+        if raw_w < 120:
+            return
+        try:
+            scale = max(1.0, float(self.page_container._get_widget_scaling()))
+        except Exception:
+            scale = 1.0
+        logical_w = max(280, int(raw_w / scale))
+        if abs(logical_w - self._last_layout_logical_w) < 10:
+            return
+        self._last_layout_logical_w = logical_w
+        self._apply_responsive_layout(logical_w)
+
+    def _apply_responsive_layout(self, logical_w: int, *, force: bool = False) -> None:
+        """Reflow multi-column cards/toolbars and update label wraplengths without clipping."""
+        if logical_w <= 0:
+            return
+        self._last_layout_logical_w = logical_w
+
+        # 1. Home Hero Buttons (3-up vs 2+1 vs 3-stack, also accounting for actual hotkey length)
+        if hasattr(self, "home_btn_row"):
+            try:
+                scale = max(1.0, float(self.home_btn_row._get_widget_scaling()))
+            except Exception:
+                scale = 1.0
+            def _btn_req(btn) -> int:
+                lbl = getattr(btn, "_text_label", None)
+                w_px = lbl.winfo_reqwidth() if lbl is not None else btn.winfo_reqwidth()
+                return math.ceil(w_px / scale) + 38
+
+            san_w = _btn_req(self.btn_hero_san)
+            res_w = _btn_req(self.btn_hero_res)
+            undo_w = max(135, _btn_req(self.btn_hero_undo))
+            avail_hero = max(260, logical_w - 38)
+            if logical_w >= 860 and (san_w + res_w + undo_w + 24) <= avail_hero:
+                hero_mode = "wide"
+            elif logical_w >= 520 and (max(san_w, res_w) * 2 + 16) <= avail_hero:
+                hero_mode = "two_row"
+            else:
+                hero_mode = "stack"
+
+            if force or self._responsive_mode.get("home_hero") != hero_mode:
+                self._responsive_mode["home_hero"] = hero_mode
+                for btn in (self.btn_hero_san, self.btn_hero_res, self.btn_hero_undo):
+                    btn.grid_forget()
+                if hero_mode == "wide":
+                    self.home_btn_row.grid_columnconfigure(0, weight=1, uniform="hero2")
+                    self.home_btn_row.grid_columnconfigure(1, weight=1, uniform="hero2")
+                    self.home_btn_row.grid_columnconfigure(2, weight=0, uniform="")
+                    self.btn_hero_san.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=0)
+                    self.btn_hero_res.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=0)
+                    self.btn_hero_undo.grid(row=0, column=2, sticky="ew", padx=0, pady=0)
+                elif hero_mode == "two_row":
+                    self.home_btn_row.grid_columnconfigure(0, weight=1, uniform="hero2")
+                    self.home_btn_row.grid_columnconfigure(1, weight=1, uniform="hero2")
+                    self.home_btn_row.grid_columnconfigure(2, weight=0, uniform="")
+                    self.btn_hero_san.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=0)
+                    self.btn_hero_res.grid(row=0, column=1, sticky="ew", padx=(6, 0), pady=0)
+                    self.btn_hero_undo.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=(8, 0))
+                else:
+                    self.home_btn_row.grid_columnconfigure(0, weight=1, uniform="")
+                    self.home_btn_row.grid_columnconfigure(1, weight=0, uniform="")
+                    self.home_btn_row.grid_columnconfigure(2, weight=0, uniform="")
+                    self.btn_hero_san.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 6))
+                    self.btn_hero_res.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 6))
+                    self.btn_hero_undo.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+
+        # 2. Home Mid Row (Protection Modes + Local File: side-by-side vs stacked)
+        if hasattr(self, "home_mid_row"):
+            mid_mode = "side_by_side" if logical_w >= 860 else "stacked"
+            if force or self._responsive_mode.get("home_mid") != mid_mode:
+                self._responsive_mode["home_mid"] = mid_mode
+                self.home_sw_card.grid_forget()
+                self.home_file_card.grid_forget()
+                if mid_mode == "side_by_side":
+                    self.home_mid_row.grid_columnconfigure(0, weight=3)
+                    self.home_mid_row.grid_columnconfigure(1, weight=2)
+                    self.home_sw_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
+                    self.home_file_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
+                else:
+                    self.home_mid_row.grid_columnconfigure(0, weight=1)
+                    self.home_mid_row.grid_columnconfigure(1, weight=0)
+                    self.home_sw_card.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 12))
+                    self.home_file_card.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+
+        # 3. Sandbox Toolbar Row 1
+        if hasattr(self, "sb_tb_row1"):
+            sb_mode = "single" if logical_w >= 660 else "double"
+            if force or self._responsive_mode.get("sb_tb") != sb_mode:
+                self._responsive_mode["sb_tb"] = sb_mode
+                for b in self._sb_toolbar_btns:
+                    b.grid_forget()
+                b_load, b_san, b_res, b_copy, b_clr = self._sb_toolbar_btns
+                if sb_mode == "single":
+                    self.sb_tb_row1.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="sbtb")
+                    self.sb_tb_row1.grid_columnconfigure(4, weight=0, uniform="")
+                    b_load.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=0)
+                    b_san.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=0)
+                    b_res.grid(row=0, column=2, sticky="ew", padx=(0, 6), pady=0)
+                    b_copy.grid(row=0, column=3, sticky="ew", padx=(0, 6), pady=0)
+                    b_clr.grid(row=0, column=4, sticky="ew", padx=0, pady=0)
+                else:
+                    self.sb_tb_row1.grid_columnconfigure((0, 1, 2), weight=1, uniform="sbtb")
+                    self.sb_tb_row1.grid_columnconfigure((3, 4), weight=0, uniform="")
+                    b_load.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(0, 6))
+                    b_san.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(0, 6))
+                    b_res.grid(row=0, column=2, sticky="ew", padx=0, pady=(0, 6))
+                    b_copy.grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 6), pady=0)
+                    b_clr.grid(row=1, column=2, sticky="ew", padx=0, pady=0)
+
+        # 4. Dictionary Words Tools Row + Rules Split + Presets
+        if hasattr(self, "dict_tools_row"):
+            dt_mode = "one_row" if logical_w >= 780 else "two_row"
+            if force or self._responsive_mode.get("dict_tools") != dt_mode:
+                self._responsive_mode["dict_tools"] = dt_mode
+                for w in (
+                    self._dict_lbl_filter, self.filter_cat_combo, self._dict_btn_clear,
+                    self._dict_btn_json, self._dict_btn_imp, self._dict_btn_exp,
+                ):
+                    w.grid_forget()
+                if dt_mode == "one_row":
+                    self.dict_tools_row.grid_columnconfigure((0, 1), weight=0, uniform="")
+                    self.dict_tools_row.grid_columnconfigure(2, weight=1, uniform="")
+                    self.dict_tools_row.grid_columnconfigure((3, 4, 5), weight=0, uniform="")
+                    self._dict_lbl_filter.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=0)
+                    self.filter_cat_combo.grid(row=0, column=1, sticky="w", padx=(0, 8), pady=0)
+                    self._dict_btn_clear.grid(row=0, column=2, sticky="w", padx=(0, 8), pady=0)
+                    self._dict_btn_json.grid(row=0, column=3, sticky="e", padx=(0, 6), pady=0)
+                    self._dict_btn_imp.grid(row=0, column=4, sticky="e", padx=(0, 6), pady=0)
+                    self._dict_btn_exp.grid(row=0, column=5, sticky="e", padx=0, pady=0)
+                else:
+                    self.dict_tools_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="")
+                    self.dict_tools_row.grid_columnconfigure((3, 4, 5), weight=0, uniform="")
+                    self._dict_lbl_filter.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=(0, 6))
+                    self.filter_cat_combo.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(0, 6))
+                    self._dict_btn_clear.grid(row=0, column=2, sticky="ew", padx=0, pady=(0, 6))
+                    self._dict_btn_json.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=0)
+                    self._dict_btn_imp.grid(row=1, column=1, sticky="ew", padx=(0, 6), pady=0)
+                    self._dict_btn_exp.grid(row=1, column=2, sticky="ew", padx=0, pady=0)
+
+        if hasattr(self, "dict_rules_pane"):
+            dr_mode = "side_by_side" if logical_w >= 760 else "stacked"
+            if force or self._responsive_mode.get("dict_rules") != dr_mode:
+                self._responsive_mode["dict_rules"] = dr_mode
+                self.dict_allow_card.grid_forget()
+                self.dict_rules_card.grid_forget()
+                if dr_mode == "side_by_side":
+                    self.dict_rules_pane.grid_columnconfigure(0, weight=2)
+                    self.dict_rules_pane.grid_columnconfigure(1, weight=3)
+                    self.dict_rules_pane.grid_rowconfigure(0, weight=1)
+                    self.dict_rules_pane.grid_rowconfigure(1, weight=0)
+                    self.dict_allow_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=2)
+                    self.dict_rules_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
+                else:
+                    self.dict_rules_pane.grid_columnconfigure(0, weight=1)
+                    self.dict_rules_pane.grid_columnconfigure(1, weight=0)
+                    self.dict_rules_pane.grid_rowconfigure(0, weight=1)
+                    self.dict_rules_pane.grid_rowconfigure(1, weight=2)
+                    self.dict_allow_card.grid(row=0, column=0, sticky="nsew", padx=0, pady=(2, 6))
+                    self.dict_rules_card.grid(row=1, column=0, sticky="nsew", padx=0, pady=(2, 2))
+
+        if hasattr(self, "dict_preset_row"):
+            rules_est_w = int(logical_w * 0.58) if logical_w >= 760 else logical_w
+            pr_mode = "three" if rules_est_w >= 520 else "two_one"
+            if force or self._responsive_mode.get("dict_preset") != pr_mode:
+                self._responsive_mode["dict_preset"] = pr_mode
+                for pb in self._preset_btns:
+                    pb.grid_forget()
+                p_dev, p_hr, p_str = self._preset_btns
+                if pr_mode == "three":
+                    self.dict_preset_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="preset")
+                    p_dev.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=0)
+                    p_hr.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=0)
+                    p_str.grid(row=0, column=2, sticky="ew", padx=0, pady=0)
+                else:
+                    self.dict_preset_row.grid_columnconfigure((0, 1), weight=1, uniform="preset2")
+                    self.dict_preset_row.grid_columnconfigure(2, weight=0, uniform="")
+                    p_dev.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(0, 6))
+                    p_hr.grid(row=0, column=1, sticky="ew", padx=0, pady=(0, 6))
+                    p_str.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
+
+        # 5. Vault Actions Row (4-col vs 2x2)
+        if hasattr(self, "vault_actions_row"):
+            va_mode = "four" if logical_w >= 540 else "two_by_two"
+            if force or self._responsive_mode.get("vault_act") != va_mode:
+                self._responsive_mode["vault_act"] = va_mode
+                for vb in self._vault_action_btns:
+                    vb.grid_forget()
+                v_ref, v_exp, v_imp, v_clr = self._vault_action_btns
+                if va_mode == "four":
+                    self.vault_actions_row.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="vact")
+                    v_ref.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=0)
+                    v_exp.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=0)
+                    v_imp.grid(row=0, column=2, sticky="ew", padx=(0, 6), pady=0)
+                    v_clr.grid(row=0, column=3, sticky="ew", padx=0, pady=0)
+                else:
+                    self.vault_actions_row.grid_columnconfigure((0, 1), weight=1, uniform="vact2")
+                    self.vault_actions_row.grid_columnconfigure((2, 3), weight=0, uniform="")
+                    v_ref.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=(0, 6))
+                    v_exp.grid(row=0, column=1, sticky="ew", padx=0, pady=(0, 6))
+                    v_imp.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=0)
+                    v_clr.grid(row=1, column=1, sticky="ew", padx=0, pady=0)
+
+        # 6. Dynamic Wraplengths + Bilingual Size Reservations
+        self._update_responsive_wraps(logical_w)
+
+    def _update_responsive_wraps(self, logical_w: int) -> None:
+        alive: List[tuple] = []
+        for widget, width_fn, variants_fn in self._responsive_wraps:
+            try:
+                if not widget.winfo_exists():
+                    continue
+            except Exception:
+                continue
+            alive.append((widget, width_fn, variants_fn))
+            raw_wrap = max(140, int(width_fn(logical_w)))
+            new_wrap = (raw_wrap // 8) * 8
+            if getattr(widget, "_aps_last_wrap", None) == new_wrap:
+                continue
+            widget._aps_last_wrap = new_wrap
+            widget.configure(wraplength=new_wrap)
+            variants: Optional[List[str]] = None
+            if variants_fn is not None:
+                variants = variants_fn()
+            elif widget in self._translation_bindings:
+                t_key, t_opt, t_prefix = self._translation_bindings[widget]
+                if t_opt == "text":
+                    variants = [
+                        t_prefix + self._format_hotkey_text(tr(lang, t_key))
+                        for lang in ("zh", "en")
+                    ]
+            if variants:
+                self._reserve_bilingual_text(widget, variants)
+        self._responsive_wraps = alive
+
     def _ready_status_text(self) -> str:
         return self._format_hotkey_text(self._t("status_ready"))
 
     def _format_hotkey_text(self, text: str) -> str:
         hotkeys = self.sanitizer.hotkeys
-        for key, action in (("S", "sanitize"), ("R", "restore")):
-            text = re.sub(r"Alt\s*\+\s*" + key + r"\b", lambda _: hotkeys[action].upper(), text, flags=re.I)
-        return text
+        san_disp = hotkeys.get("sanitize", "alt+s").upper()
+        res_disp = hotkeys.get("restore", "alt+r").upper()
+        return re.sub(
+            r"Alt\s*\+\s*([SR])\b",
+            lambda match: san_disp if match.group(1).upper() == "S" else res_disp,
+            text,
+            flags=re.I,
+        )
 
     def _guide_text(self) -> str:
         return self._format_hotkey_text(self._t("tutorial_body").strip())
@@ -573,6 +1226,10 @@ class _ModernControlCenter:
         )
         self._refresh_sidebar_status_label()
         self._refresh_hotkey_labels()
+        if hasattr(self, "combo_hk_sanitize") and hasattr(self.combo_hk_sanitize, "set_listening_text"):
+            self.combo_hk_sanitize.set_listening_text(self._t("hk_box_listening"))
+        if hasattr(self, "combo_hk_restore") and hasattr(self.combo_hk_restore, "set_listening_text"):
+            self.combo_hk_restore.set_listening_text(self._t("hk_box_listening"))
         if self._recording_target:
             target = self.btn_rec_san if self._recording_target == "sanitize" else self.btn_rec_res
             target.configure(text=self._t("btn_hk_recording"))
@@ -631,10 +1288,11 @@ class _ModernControlCenter:
 
         if self._recording_target is not None:
             self._recording_target = None
-            try:
-                self.root.unbind("<KeyPress>")
-            except Exception:
-                pass
+            for seq in ("<KeyPress>", "<KeyRelease>"):
+                try:
+                    self.root.unbind(seq)
+                except Exception:
+                    pass
 
         for attr, widget_attr, is_text in (
             ("_saved_sandbox_input", "sandbox_input", True),
@@ -801,6 +1459,9 @@ class _ModernControlCenter:
             self._discard_layout(old_container)
 
     def _construct_layout(self) -> None:
+        self._responsive_wraps = []
+        self._responsive_mode = {}
+        self._last_layout_logical_w = 0
         if getattr(self, "_sandbox_debounce_id", None) is not None:
             try:
                 self.root.after_cancel(self._sandbox_debounce_id)
@@ -809,10 +1470,11 @@ class _ModernControlCenter:
             self._sandbox_debounce_id = None
         if self._recording_target is not None:
             self._recording_target = None
-            try:
-                self.root.unbind("<KeyPress>")
-            except Exception:
-                pass
+            for seq in ("<KeyPress>", "<KeyRelease>"):
+                try:
+                    self.root.unbind(seq)
+                except Exception:
+                    pass
 
         self.root.title(self._t("window_title"))
         self.status_var = tk.StringVar(value=self._ready_status_text())
@@ -1019,6 +1681,7 @@ class _ModernControlCenter:
 
         self.page_container = ctk.CTkFrame(right_shell, fg_color="transparent")
         self.page_container.pack(fill="both", expand=True, padx=18, pady=(14, 6))
+        self.page_container.bind("<Configure>", self._on_page_container_configure)
 
         self.pages: Dict[str, ctk.CTkFrame] = {}
         self._build_page_home()
@@ -1028,7 +1691,7 @@ class _ModernControlCenter:
         self._build_page_settings()
         self._build_page_guide()
 
-        # --- 3. Bottom Compact Status Bar ---
+        # --- 3. Bottom Compact Status Bar (pack right buttons first so status text never crowds them) ---
         footer = ctk.CTkFrame(
             self._main_container,
             fg_color=("#ffffff", "#111827"),
@@ -1036,14 +1699,6 @@ class _ModernControlCenter:
             height=42,
         )
         footer.pack(fill="x", side="bottom")
-
-        ctk.CTkLabel(
-            footer,
-            textvariable=self.status_var,
-            font=self.font_small,
-            text_color=("#0284c7", "#38bdf8"),
-            anchor="w",
-        ).pack(side="left", padx=16, pady=6)
 
         self._localized_widget(
             ctk.CTkButton,
@@ -1073,8 +1728,18 @@ class _ModernControlCenter:
             command=self.hide,
         ).pack(side="right", padx=(0, 4), pady=6)
 
+        ctk.CTkLabel(
+            footer,
+            textvariable=self.status_var,
+            font=self.font_small,
+            text_color=("#0284c7", "#38bdf8"),
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True, padx=16, pady=6)
+
         self._refresh_sidebar_status_label()
         self._update_idle_readout()
+        init_page_w = max(580, getattr(self, "_initial_logical_width", 980) - 224 - 36)
+        self._apply_responsive_layout(init_page_w, force=True)
         target_label = self._nav_key_to_label.get(self._active_page_key, self._nav_labels[0])
         self.nav_bar.set(target_label)
         self._show_page(self._active_page_key)
@@ -1128,34 +1793,38 @@ class _ModernControlCenter:
         )
         hero.pack(fill="x", pady=(0, 12))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            hero,
-            translation_key="hero_badge",
-            font=self.font_h2,
-            text_color=("#059669", "#34d399"),
-        ).pack(anchor="w", padx=18, pady=(14, 4))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                hero,
+                translation_key="hero_badge",
+                font=self.font_h2,
+                text_color=("#059669", "#34d399"),
+                justify="left",
+            ),
+            lambda w: w - 56,
+        ).pack(anchor="w", fill="x", padx=18, pady=(14, 4))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            hero,
-            translation_key="hero_desc",
-            font=self.font_body,
-            text_color=("#334155", "#cbd5e1"),
-            justify="left",
-        ).pack(anchor="w", padx=18, pady=(0, 12))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                hero,
+                translation_key="hero_desc",
+                font=self.font_body,
+                text_color=("#334155", "#cbd5e1"),
+                justify="left",
+            ),
+            lambda w: w - 56,
+        ).pack(anchor="w", fill="x", padx=18, pady=(0, 12))
 
-        btn_row = ctk.CTkFrame(hero, fg_color="transparent")
-        btn_row.pack(fill="x", padx=18, pady=(0, 14))
-
-        hk = self.sanitizer.hotkeys
-        san_disp = hk.get("sanitize", "alt+s").upper()
-        res_disp = hk.get("restore", "alt+r").upper()
+        self.home_btn_row = ctk.CTkFrame(hero, fg_color="transparent")
+        self.home_btn_row.pack(fill="x", padx=18, pady=(0, 14))
 
         self.btn_hero_san = ctk.CTkButton(
-            btn_row,
-            text=re.sub(r"\(Alt\s*\+\s*S\)", f"({san_disp})", self._t("btn_hero_sanitize")),
+            self.home_btn_row,
+            text=self._format_hotkey_text(self._t("btn_hero_sanitize")),
             font=self.font_h3,
+            width=10,
             height=42,
             corner_radius=10,
             fg_color=("#059669", "#059669"),
@@ -1163,12 +1832,12 @@ class _ModernControlCenter:
             text_color="#ffffff",
             command=self._trigger_sanitize_clipboard,
         )
-        self.btn_hero_san.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
         self.btn_hero_res = ctk.CTkButton(
-            btn_row,
-            text=re.sub(r"\(Alt\s*\+\s*R\)", f"({res_disp})", self._t("btn_hero_restore")),
+            self.home_btn_row,
+            text=self._format_hotkey_text(self._t("btn_hero_restore")),
             font=self.font_h3,
+            width=10,
             height=42,
             corner_radius=10,
             fg_color=("#2563eb", "#2563eb"),
@@ -1176,14 +1845,13 @@ class _ModernControlCenter:
             text_color="#ffffff",
             command=self._trigger_restore_clipboard,
         )
-        self.btn_hero_res.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
         self.btn_hero_undo = self._localized_widget(
             ctk.CTkButton,
-            btn_row,
+            self.home_btn_row,
             translation_key="btn_hero_undo",
             font=self.font_h3,
-            width=145,
+            width=10,
             height=42,
             corner_radius=10,
             fg_color=("#475569", "#334155"),
@@ -1191,12 +1859,11 @@ class _ModernControlCenter:
             text_color="#ffffff",
             command=self._trigger_undo_sanitize,
         )
-        self.btn_hero_undo.pack(side="left")
 
         # 3 Dynamic KPI Cards
         stats_row = ctk.CTkFrame(page, fg_color="transparent")
         stats_row.pack(fill="x", pady=(0, 12))
-        stats_row.grid_columnconfigure((0, 1, 2), weight=1)
+        stats_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="kpi")
 
         self.lbl_stat_hits = self._create_stat_card(
             stats_row,
@@ -1225,99 +1892,109 @@ class _ModernControlCenter:
         )
 
         # Dual Row: Quick Modes Card + Local File Sanitize/Restore Card
-        mid_row = ctk.CTkFrame(page, fg_color="transparent")
-        mid_row.pack(fill="x", pady=(0, 12))
-        mid_row.grid_columnconfigure(0, weight=3)
-        mid_row.grid_columnconfigure(1, weight=2)
+        self.home_mid_row = ctk.CTkFrame(page, fg_color="transparent")
+        self.home_mid_row.pack(fill="x", pady=(0, 12))
 
-        sw_card = ctk.CTkFrame(
-            mid_row,
+        self.home_sw_card = ctk.CTkFrame(
+            self.home_mid_row,
             fg_color=("#ffffff", "#1e293b"),
             corner_radius=14,
             border_width=1,
             border_color=("#e2e8f0", "#334155"),
         )
-        sw_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
         self._localized_widget(
             ctk.CTkLabel,
-            sw_card,
+            self.home_sw_card,
             translation_key="switches_section_title",
             font=self.font_h3,
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=16, pady=(12, 4))
 
+        home_sw_wrap = lambda w: (int(w * 0.56) - 108) if w >= 860 else (w - 108)
         self._create_switch_row(
-            sw_card,
+            self.home_sw_card,
             title="sw_semantic_title",
             desc="sw_semantic_desc",
             variable=self.var_semantic_ip,
             command=self._on_toggle_semantic_ip,
+            wrap_fn=home_sw_wrap,
         )
         self._create_switch_row(
-            sw_card,
+            self.home_sw_card,
             title="sw_ai_hint_title",
             desc="sw_ai_hint_desc",
             variable=self.var_ai_hint,
             command=self._on_toggle_ai_hint,
+            wrap_fn=home_sw_wrap,
         )
 
         # File Sanitize / Restore Card (v0.5.0)
-        file_card = ctk.CTkFrame(
-            mid_row,
+        self.home_file_card = ctk.CTkFrame(
+            self.home_mid_row,
             fg_color=("#ffffff", "#1e293b"),
             corner_radius=14,
             border_width=1,
             border_color=("#e2e8f0", "#334155"),
         )
-        file_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            file_card,
-            translation_key="file_drop_title",
-            font=self.font_h3,
-            text_color=("#0f172a", "#f8fafc"),
-        ).pack(anchor="w", padx=16, pady=(12, 4))
+        file_wrap = lambda w: (int(w * 0.38) - 48) if w >= 860 else (w - 52)
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                self.home_file_card,
+                translation_key="file_drop_title",
+                font=self.font_h3,
+                text_color=("#0f172a", "#f8fafc"),
+                justify="left",
+            ),
+            file_wrap,
+        ).pack(anchor="w", fill="x", padx=16, pady=(12, 4))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            file_card,
-            translation_key="file_drop_desc",
-            font=self.font_small,
-            text_color=("#64748b", "#94a3b8"),
-            wraplength=260,
-            justify="left",
-        ).pack(anchor="w", padx=16, pady=(0, 12))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                self.home_file_card,
+                translation_key="file_drop_desc",
+                font=self.font_small,
+                text_color=("#64748b", "#94a3b8"),
+                wraplength=260,
+                justify="left",
+            ),
+            file_wrap,
+        ).pack(anchor="w", fill="x", padx=16, pady=(0, 12))
 
-        file_btns = ctk.CTkFrame(file_card, fg_color="transparent")
+        file_btns = ctk.CTkFrame(self.home_file_card, fg_color="transparent")
         file_btns.pack(fill="x", padx=16, pady=(0, 14))
+        file_btns.grid_columnconfigure((0, 1), weight=1, uniform="fbtn")
 
         self._localized_widget(
             ctk.CTkButton,
             file_btns,
             translation_key="btn_sanitize_file",
             font=self.font_small,
+            width=10,
             height=34,
             corner_radius=8,
             fg_color=("#059669", "#059669"),
             hover_color=("#047857", "#047857"),
             text_color="#ffffff",
             command=self._sanitize_local_file_dialog,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
 
         self._localized_widget(
             ctk.CTkButton,
             file_btns,
             translation_key="btn_restore_file",
             font=self.font_small,
+            width=10,
             height=34,
             corner_radius=8,
             fg_color=("#2563eb", "#2563eb"),
             hover_color=("#1d4ed8", "#1d4ed8"),
             text_color="#ffffff",
             command=self._restore_local_file_dialog,
-        ).pack(side="left", fill="x", expand=True)
+        ).grid(row=0, column=1, sticky="ew", padx=0)
 
         # Workflow Banner
         wf_card = ctk.CTkFrame(
@@ -1329,25 +2006,26 @@ class _ModernControlCenter:
         )
         wf_card.pack(fill="x", pady=(0, 6))
 
-        wf_text = (
+        wf_text = self._format_hotkey_text(
             f"{self._t('workflow_title')}：{self._t('workflow_steps')}"
-            .replace("Alt+S", san_disp)
-            .replace("Alt+R", res_disp)
         )
         self.lbl_workflow = ctk.CTkLabel(
             wf_card,
             text=wf_text,
             font=self.font_body,
             text_color=("#0369a1", "#7dd3fc"),
+            anchor="w",
+            justify="left",
         )
-        self._reserve_bilingual_text(
+        self._register_wrap_label(
             self.lbl_workflow,
-            [
+            lambda w: w - 56,
+            variants_fn=lambda: [
                 self._format_hotkey_text(f"{tr(lang, 'workflow_title')}：{tr(lang, 'workflow_steps')}")
                 for lang in ("zh", "en")
             ],
         )
-        self.lbl_workflow.pack(padx=16, pady=10)
+        self.lbl_workflow.pack(fill="x", padx=16, pady=10)
 
     def _create_stat_card(
         self,
@@ -1400,31 +2078,13 @@ class _ModernControlCenter:
         desc: str,
         variable: tk.BooleanVar,
         command: Callable[[], None],
+        *,
+        wrap_fn: Optional[Callable[[int], int]] = None,
     ) -> ctk.CTkFrame:
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=6)
 
-        txt_box = ctk.CTkFrame(row, fg_color="transparent")
-        txt_box.pack(side="left", fill="x", expand=True)
-
-        self._localized_widget(
-            ctk.CTkLabel,
-            txt_box,
-            translation_key=title,
-            font=self.font_body,
-            anchor="w",
-            text_color=("#0f172a", "#f8fafc"),
-        ).pack(anchor="w")
-
-        self._localized_widget(
-            ctk.CTkLabel,
-            txt_box,
-            translation_key=desc,
-            font=self.font_small,
-            anchor="w",
-            text_color=("#64748b", "#94a3b8"),
-        ).pack(anchor="w")
-
+        # Pack switch on the right FIRST so long descriptions can never push it off-screen.
         ctk.CTkSwitch(
             row,
             text="",
@@ -1435,6 +2095,37 @@ class _ModernControlCenter:
             command=command,
             width=46,
         ).pack(side="right", padx=(10, 0))
+
+        txt_box = ctk.CTkFrame(row, fg_color="transparent")
+        txt_box.pack(side="left", fill="x", expand=True)
+
+        eff_wrap = wrap_fn or (lambda w: w - 110)
+
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                txt_box,
+                translation_key=title,
+                font=self.font_body,
+                anchor="w",
+                justify="left",
+                text_color=("#0f172a", "#f8fafc"),
+            ),
+            eff_wrap,
+        ).pack(anchor="w", fill="x")
+
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                txt_box,
+                translation_key=desc,
+                font=self.font_small,
+                anchor="w",
+                justify="left",
+                text_color=("#64748b", "#94a3b8"),
+            ),
+            eff_wrap,
+        ).pack(anchor="w", fill="x")
         return row
 
     # ---------------- Page 2: Live Sandbox (Isolated + Risk-Colored + Allowlist Menu) ----------------
@@ -1452,72 +2143,88 @@ class _ModernControlCenter:
         )
         toolbar.pack(fill="x", pady=(0, 8))
 
-        tb_row1 = ctk.CTkFrame(toolbar, fg_color="transparent")
-        tb_row1.pack(fill="x", padx=12, pady=(8, 4))
+        self.sb_tb_row1 = ctk.CTkFrame(toolbar, fg_color="transparent")
+        self.sb_tb_row1.pack(fill="x", padx=12, pady=(8, 4))
 
-        self._localized_widget(
-            ctk.CTkButton,
-            tb_row1,
-            translation_key="btn_load_sample",
-            font=self.font_small,
-            height=32,
-            corner_radius=8,
-            fg_color=("#475569", "#334155"),
-            hover_color=("#334155", "#475569"),
-            command=self._load_sample_into_sandbox,
-        ).pack(side="left", padx=(0, 6))
-
-        self._localized_widget(
-            ctk.CTkButton,
-            tb_row1,
-            translation_key="btn_run_sanitize",
-            font=self.font_h3,
-            height=32,
-            corner_radius=8,
-            fg_color=("#059669", "#059669"),
-            hover_color=("#047857", "#047857"),
-            command=self._run_sandbox_sanitize,
-        ).pack(side="left", padx=(0, 6))
-
-        self._localized_widget(
-            ctk.CTkButton,
-            tb_row1,
-            translation_key="btn_run_restore",
-            font=self.font_small,
-            height=32,
-            corner_radius=8,
-            fg_color=("#2563eb", "#2563eb"),
-            hover_color=("#1d4ed8", "#1d4ed8"),
-            command=self._run_sandbox_restore,
-        ).pack(side="left", padx=(0, 6))
-
-        self._localized_widget(
-            ctk.CTkButton,
-            tb_row1,
-            translation_key="btn_copy_output",
-            font=self.font_small,
-            height=32,
-            corner_radius=8,
-            fg_color=("#475569", "#334155"),
-            hover_color=("#334155", "#475569"),
-            command=self._copy_sandbox_output,
-        ).pack(side="left", padx=(0, 6))
-
-        self._localized_widget(
-            ctk.CTkButton,
-            tb_row1,
-            translation_key="btn_clear_sandbox",
-            font=self.font_small,
-            width=72,
-            height=32,
-            corner_radius=8,
-            fg_color=("#dc2626", "#991b1b"),
-            hover_color=("#b91c1c", "#7f1d1d"),
-            command=self._clear_sandbox,
-        ).pack(side="right")
+        self._sb_toolbar_btns = [
+            self._localized_widget(
+                ctk.CTkButton,
+                self.sb_tb_row1,
+                translation_key="btn_load_sample",
+                font=self.font_small,
+                width=10,
+                height=32,
+                corner_radius=8,
+                fg_color=("#475569", "#334155"),
+                hover_color=("#334155", "#475569"),
+                command=self._load_sample_into_sandbox,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.sb_tb_row1,
+                translation_key="btn_run_sanitize",
+                font=self.font_h3,
+                width=10,
+                height=32,
+                corner_radius=8,
+                fg_color=("#059669", "#059669"),
+                hover_color=("#047857", "#047857"),
+                command=self._run_sandbox_sanitize,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.sb_tb_row1,
+                translation_key="btn_run_restore",
+                font=self.font_small,
+                width=10,
+                height=32,
+                corner_radius=8,
+                fg_color=("#2563eb", "#2563eb"),
+                hover_color=("#1d4ed8", "#1d4ed8"),
+                command=self._run_sandbox_restore,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.sb_tb_row1,
+                translation_key="btn_copy_output",
+                font=self.font_small,
+                width=10,
+                height=32,
+                corner_radius=8,
+                fg_color=("#475569", "#334155"),
+                hover_color=("#334155", "#475569"),
+                command=self._copy_sandbox_output,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.sb_tb_row1,
+                translation_key="btn_clear_sandbox",
+                font=self.font_small,
+                width=72,
+                height=32,
+                corner_radius=8,
+                fg_color=("#dc2626", "#991b1b"),
+                hover_color=("#b91c1c", "#7f1d1d"),
+                command=self._clear_sandbox,
+            ),
+        ]
 
         tb_row2 = ctk.CTkFrame(toolbar, fg_color="transparent")
         tb_row2.pack(fill="x", padx=12, pady=(2, 8))
+
+        self._localized_widget(
+            ctk.CTkButton,
+            tb_row2,
+            translation_key="btn_sync_sandbox_vault",
+            font=self.font_small,
+            width=10,
+            height=26,
+            corner_radius=7,
+            fg_color=("#e2e8f0", "#334155"),
+            hover_color=("#cbd5e1", "#475569"),
+            text_color=("#0f172a", "#f8fafc"),
+            command=self._sync_sandbox_to_global_vault,
+        ).pack(side="right", padx=(8, 0))
 
         self.var_sandbox_isolate = tk.BooleanVar(value=self._sandbox_isolate)
         self._localized_widget(
@@ -1532,19 +2239,6 @@ class _ModernControlCenter:
             checkbox_height=16,
             command=self._on_toggle_sandbox_isolate,
         ).pack(side="left")
-
-        self._localized_widget(
-            ctk.CTkButton,
-            tb_row2,
-            translation_key="btn_sync_sandbox_vault",
-            font=self.font_small,
-            height=26,
-            corner_radius=7,
-            fg_color=("#e2e8f0", "#334155"),
-            hover_color=("#cbd5e1", "#475569"),
-            text_color=("#0f172a", "#f8fafc"),
-            command=self._sync_sandbox_to_global_vault,
-        ).pack(side="right")
 
         # Multi-Row Wrapping Category Breakdown Bar
         self.sandbox_cat_bar = ctk.CTkFrame(
@@ -1569,7 +2263,7 @@ class _ModernControlCenter:
 
         panes = ctk.CTkFrame(page, fg_color="transparent")
         panes.pack(fill="both", expand=True)
-        panes.grid_columnconfigure((0, 1), weight=1)
+        panes.grid_columnconfigure((0, 1), weight=1, uniform="sbpane")
         panes.grid_rowconfigure(0, weight=1)
 
         left_card = ctk.CTkFrame(
@@ -1581,13 +2275,17 @@ class _ModernControlCenter:
         )
         left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            left_card,
-            translation_key="sandbox_left_title",
-            font=self.font_h3,
-            text_color=("#0f172a", "#f8fafc"),
-        ).pack(anchor="w", padx=12, pady=(8, 4))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                left_card,
+                translation_key="sandbox_left_title",
+                font=self.font_h3,
+                text_color=("#0f172a", "#f8fafc"),
+                justify="left",
+            ),
+            lambda w: max(180, w // 2 - 44),
+        ).pack(anchor="w", fill="x", padx=12, pady=(8, 4))
 
         self.sandbox_input = ctk.CTkTextbox(
             left_card,
@@ -1613,13 +2311,17 @@ class _ModernControlCenter:
         )
         right_card.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            right_card,
-            translation_key="sandbox_right_title",
-            font=self.font_h3,
-            text_color=("#059669", "#34d399"),
-        ).pack(anchor="w", padx=12, pady=(8, 4))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                right_card,
+                translation_key="sandbox_right_title",
+                font=self.font_h3,
+                text_color=("#059669", "#34d399"),
+                justify="left",
+            ),
+            lambda w: max(180, w // 2 - 44),
+        ).pack(anchor="w", fill="x", padx=12, pady=(8, 4))
 
         self.sandbox_output = ctk.CTkTextbox(
             right_card,
@@ -1697,13 +2399,17 @@ class _ModernControlCenter:
             text_color=("#1d4ed8", "#93c5fd"),
         ).pack(anchor="w", padx=14, pady=(8, 2))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            banner,
-            translation_key="dict_banner_desc",
-            font=self.font_small,
-            text_color=("#1e40af", "#bfdbfe"),
-        ).pack(anchor="w", padx=14, pady=(0, 8))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                banner,
+                translation_key="dict_banner_desc",
+                font=self.font_small,
+                text_color=("#1e40af", "#bfdbfe"),
+                justify="left",
+            ),
+            lambda w: w - 52,
+        ).pack(anchor="w", fill="x", padx=14, pady=(0, 8))
 
         add_card = ctk.CTkFrame(
             self.dict_words_pane,
@@ -1729,7 +2435,7 @@ class _ModernControlCenter:
             add_row,
             values=cat_values,
             font=self.font_small,
-            width=185,
+            width=190,
             state="readonly",
         )
         self.add_cat_combo.set(
@@ -1781,22 +2487,22 @@ class _ModernControlCenter:
             command=self._on_toggle_whole_word,
         ).pack(side="left")
 
-        tools_row = ctk.CTkFrame(self.dict_words_pane, fg_color="transparent")
-        tools_row.pack(fill="x", pady=(0, 6))
+        self.dict_tools_row = ctk.CTkFrame(self.dict_words_pane, fg_color="transparent")
+        self.dict_tools_row.pack(fill="x", pady=(0, 6))
 
-        self._localized_widget(
+        self._dict_lbl_filter = self._localized_widget(
             ctk.CTkLabel,
-            tools_row,
+            self.dict_tools_row,
             translation_key="lbl_filter_cat",
             font=self.font_small,
-        ).pack(side="left")
+        )
 
         filter_values = [self._cat_label("ALL")] + cat_values
         self.filter_cat_combo = ctk.CTkComboBox(
-            tools_row,
+            self.dict_tools_row,
             values=filter_values,
             font=self.font_small,
-            width=185,
+            width=165,
             state="readonly",
             command=lambda _v: self.refresh_dictionary_list(),
         )
@@ -1805,57 +2511,58 @@ class _ModernControlCenter:
             if self._saved_filter_cat_key in (["ALL"] + CATEGORY_KEYS)
             else filter_values[0]
         )
-        self.filter_cat_combo.pack(side="left", padx=(6, 8))
 
-        self._localized_widget(
+        self._dict_btn_clear = self._localized_widget(
             ctk.CTkButton,
-            tools_row,
+            self.dict_tools_row,
             translation_key="btn_clear_all_dict",
             font=self.font_small,
+            width=10,
             height=30,
             corner_radius=8,
             fg_color=("#dc2626", "#991b1b"),
             hover_color=("#b91c1c", "#7f1d1d"),
             command=self._confirm_clear_all_custom_words,
-        ).pack(side="left", padx=(0, 6))
+        )
 
-        self._localized_widget(
+        self._dict_btn_exp = self._localized_widget(
             ctk.CTkButton,
-            tools_row,
+            self.dict_tools_row,
             translation_key="btn_export",
             font=self.font_small,
-            width=76,
+            width=10,
             height=30,
             corner_radius=8,
             fg_color=("#475569", "#334155"),
             hover_color=("#334155", "#475569"),
             command=self._export_dictionary,
-        ).pack(side="right", padx=(4, 0))
+        )
 
-        self._localized_widget(
+        self._dict_btn_imp = self._localized_widget(
             ctk.CTkButton,
-            tools_row,
+            self.dict_tools_row,
             translation_key="btn_import",
             font=self.font_small,
-            width=76,
+            width=10,
             height=30,
             corner_radius=8,
             fg_color=("#475569", "#334155"),
             hover_color=("#334155", "#475569"),
             command=self._import_dictionary,
-        ).pack(side="right", padx=(4, 0))
+        )
 
-        self._localized_widget(
+        self._dict_btn_json = self._localized_widget(
             ctk.CTkButton,
-            tools_row,
+            self.dict_tools_row,
             translation_key="btn_json_editor",
             font=self.font_small,
+            width=10,
             height=30,
             corner_radius=8,
             fg_color=("#2563eb", "#2563eb"),
             hover_color=("#1d4ed8", "#1d4ed8"),
             command=self.open_in_app_json_modal,
-        ).pack(side="right")
+        )
 
         self.dict_scroll = ctk.CTkScrollableFrame(
             self.dict_words_pane,
@@ -1868,28 +2575,29 @@ class _ModernControlCenter:
 
         # Sub-container 2: Allowlist & Human-Friendly Rules + Scenario Presets
         self.dict_rules_pane = ctk.CTkFrame(page, fg_color="transparent")
-        self.dict_rules_pane.grid_columnconfigure(0, weight=2)
-        self.dict_rules_pane.grid_columnconfigure(1, weight=3)
-        self.dict_rules_pane.grid_rowconfigure(0, weight=1)
 
-        allow_card = ctk.CTkFrame(
+        self.dict_allow_card = ctk.CTkFrame(
             self.dict_rules_pane,
             fg_color=("#ffffff", "#1e293b"),
             corner_radius=12,
             border_width=1,
             border_color=("#e2e8f0", "#334155"),
         )
-        allow_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=2)
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            allow_card,
-            translation_key="allowlist_title",
-            font=self.font_h3,
-            text_color=("#0f172a", "#f8fafc"),
-        ).pack(anchor="w", padx=12, pady=(10, 6))
+        allow_wrap = lambda w: (int(w * 0.38) - 40) if w >= 760 else (w - 48)
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                self.dict_allow_card,
+                translation_key="allowlist_title",
+                font=self.font_h3,
+                text_color=("#0f172a", "#f8fafc"),
+                justify="left",
+            ),
+            allow_wrap,
+        ).pack(anchor="w", fill="x", padx=12, pady=(10, 6))
 
-        allow_in_row = ctk.CTkFrame(allow_card, fg_color="transparent")
+        allow_in_row = ctk.CTkFrame(self.dict_allow_card, fg_color="transparent")
         allow_in_row.pack(fill="x", padx=12, pady=(0, 8))
 
         self.entry_allowlist = self._localized_widget(
@@ -1920,56 +2628,63 @@ class _ModernControlCenter:
         ).pack(side="left")
 
         self.allowlist_scroll = ctk.CTkScrollableFrame(
-            allow_card,
+            self.dict_allow_card,
             fg_color=("#f8fafc", "#0f172a"),
             corner_radius=8,
         )
         self.allowlist_scroll.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        rules_card = ctk.CTkFrame(
+        self.dict_rules_card = ctk.CTkFrame(
             self.dict_rules_pane,
             fg_color=("#ffffff", "#1e293b"),
             corner_radius=12,
             border_width=1,
             border_color=("#e2e8f0", "#334155"),
         )
-        rules_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            rules_card,
-            translation_key="rules_toggle_title",
-            font=self.font_h3,
-            text_color=("#0f172a", "#f8fafc"),
-        ).pack(anchor="w", padx=12, pady=(10, 6))
+        rules_wrap = lambda w: (int(w * 0.58) - 40) if w >= 760 else (w - 48)
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                self.dict_rules_card,
+                translation_key="rules_toggle_title",
+                font=self.font_h3,
+                text_color=("#0f172a", "#f8fafc"),
+                justify="left",
+            ),
+            rules_wrap,
+        ).pack(anchor="w", fill="x", padx=12, pady=(10, 6))
 
-        # Preset Buttons Row
-        preset_row = ctk.CTkFrame(rules_card, fg_color="transparent")
-        preset_row.pack(fill="x", padx=12, pady=(0, 6))
-        for p_key, t_key in (
-            ("dev", "preset_dev"),
-            ("hr", "preset_hr"),
-            ("strict", "preset_strict"),
-        ):
+        # Preset Buttons Row (responsive 3-up or 2+1)
+        self.dict_preset_row = ctk.CTkFrame(self.dict_rules_card, fg_color="transparent")
+        self.dict_preset_row.pack(fill="x", padx=12, pady=(0, 6))
+        self._preset_btns = [
             self._localized_widget(
                 ctk.CTkButton,
-                preset_row,
+                self.dict_preset_row,
                 translation_key=t_key,
                 font=self.font_small,
+                width=10,
                 height=28,
                 corner_radius=7,
                 fg_color=("#e2e8f0", "#334155"),
                 hover_color=("#cbd5e1", "#475569"),
                 text_color=("#0f172a", "#f8fafc"),
                 command=lambda p=p_key: self._apply_preset_from_gui(p),
-            ).pack(side="left", padx=(0, 6))
+            )
+            for p_key, t_key in (
+                ("dev", "preset_dev"),
+                ("hr", "preset_hr"),
+                ("strict", "preset_strict"),
+            )
+        ]
 
         # Rule Search Input
         self.rule_search_var = tk.StringVar(value=self._saved_rule_search)
         self.rule_search_var.trace_add("write", lambda *_a: self._schedule_rule_search_refresh())
         self.entry_rule_search = self._localized_widget(
             ctk.CTkEntry,
-            rules_card,
+            self.dict_rules_card,
             textvariable=self.rule_search_var,
             translation_key="placeholder_rule_search",
             translation_option="placeholder_text",
@@ -1980,7 +2695,7 @@ class _ModernControlCenter:
         self._attach_text_context_menu(self.entry_rule_search, is_textbox=False)
 
         self.rules_toggle_scroll = ctk.CTkScrollableFrame(
-            rules_card,
+            self.dict_rules_card,
             fg_color=("#f8fafc", "#0f172a"),
             corner_radius=8,
         )
@@ -2007,28 +2722,13 @@ class _ModernControlCenter:
         )
         top_bar.pack(fill="x", pady=(0, 8))
 
-        bar_inner = ctk.CTkFrame(top_bar, fg_color="transparent")
-        bar_inner.pack(fill="x", padx=12, pady=8)
-
-        self.vault_search_var = tk.StringVar(value=self._saved_vault_search)
-        self.vault_search_var.trace_add("write", lambda *_a: self._schedule_vault_search_refresh())
-        self.entry_vault_search = self._localized_widget(
-            ctk.CTkEntry,
-            bar_inner,
-            textvariable=self.vault_search_var,
-            translation_key="placeholder_search_vault",
-            translation_option="placeholder_text",
-            font=self.font_small,
-            width=190,
-            height=30,
-        )
-        self.entry_vault_search.pack(side="left", padx=(0, 8))
-        self._attach_text_context_menu(self.entry_vault_search, is_textbox=False)
+        bar_row1 = ctk.CTkFrame(top_bar, fg_color="transparent")
+        bar_row1.pack(fill="x", padx=12, pady=(8, 4))
 
         self.var_reveal_vault = tk.BooleanVar(value=self._reveal_vault_originals)
         self._localized_widget(
             ctk.CTkSwitch,
-            bar_inner,
+            bar_row1,
             translation_key="sw_reveal_vault",
             font=self.font_small,
             variable=self.var_reveal_vault,
@@ -2036,56 +2736,75 @@ class _ModernControlCenter:
             offvalue=False,
             progress_color=("#059669", "#10b981"),
             command=self._on_toggle_reveal_vault,
-        ).pack(side="left", padx=(0, 8))
+        ).pack(side="right", padx=(10, 0))
 
-        self._localized_widget(
-            ctk.CTkButton,
-            bar_inner,
-            translation_key="btn_clear_vault",
+        self.vault_search_var = tk.StringVar(value=self._saved_vault_search)
+        self.vault_search_var.trace_add("write", lambda *_a: self._schedule_vault_search_refresh())
+        self.entry_vault_search = self._localized_widget(
+            ctk.CTkEntry,
+            bar_row1,
+            textvariable=self.vault_search_var,
+            translation_key="placeholder_search_vault",
+            translation_option="placeholder_text",
             font=self.font_small,
             height=30,
-            corner_radius=8,
-            fg_color=("#dc2626", "#991b1b"),
-            hover_color=("#b91c1c", "#7f1d1d"),
-            command=self._confirm_clear_vault_from_gui,
-        ).pack(side="right", padx=(4, 0))
+        )
+        self.entry_vault_search.pack(side="left", fill="x", expand=True)
+        self._attach_text_context_menu(self.entry_vault_search, is_textbox=False)
 
-        self._localized_widget(
-            ctk.CTkButton,
-            bar_inner,
-            translation_key="btn_import_enc_vault",
-            font=self.font_small,
-            height=30,
-            corner_radius=8,
-            fg_color=("#475569", "#334155"),
-            hover_color=("#334155", "#475569"),
-            command=self._import_encrypted_vault_from_gui,
-        ).pack(side="right", padx=(4, 0))
+        self.vault_actions_row = ctk.CTkFrame(top_bar, fg_color="transparent")
+        self.vault_actions_row.pack(fill="x", padx=12, pady=(2, 8))
 
-        self._localized_widget(
-            ctk.CTkButton,
-            bar_inner,
-            translation_key="btn_export_enc_vault",
-            font=self.font_small,
-            height=30,
-            corner_radius=8,
-            fg_color=("#2563eb", "#2563eb"),
-            hover_color=("#1d4ed8", "#1d4ed8"),
-            command=self._export_encrypted_vault_from_gui,
-        ).pack(side="right", padx=(4, 0))
-
-        self._localized_widget(
-            ctk.CTkButton,
-            bar_inner,
-            translation_key="btn_refresh_vault",
-            font=self.font_small,
-            width=72,
-            height=30,
-            corner_radius=8,
-            fg_color=("#475569", "#334155"),
-            hover_color=("#334155", "#475569"),
-            command=self.refresh_vault_list,
-        ).pack(side="right")
+        self._vault_action_btns = [
+            self._localized_widget(
+                ctk.CTkButton,
+                self.vault_actions_row,
+                translation_key="btn_refresh_vault",
+                font=self.font_small,
+                width=10,
+                height=30,
+                corner_radius=8,
+                fg_color=("#475569", "#334155"),
+                hover_color=("#334155", "#475569"),
+                command=self.refresh_vault_list,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.vault_actions_row,
+                translation_key="btn_export_enc_vault",
+                font=self.font_small,
+                width=10,
+                height=30,
+                corner_radius=8,
+                fg_color=("#2563eb", "#2563eb"),
+                hover_color=("#1d4ed8", "#1d4ed8"),
+                command=self._export_encrypted_vault_from_gui,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.vault_actions_row,
+                translation_key="btn_import_enc_vault",
+                font=self.font_small,
+                width=10,
+                height=30,
+                corner_radius=8,
+                fg_color=("#475569", "#334155"),
+                hover_color=("#334155", "#475569"),
+                command=self._import_encrypted_vault_from_gui,
+            ),
+            self._localized_widget(
+                ctk.CTkButton,
+                self.vault_actions_row,
+                translation_key="btn_clear_vault",
+                font=self.font_small,
+                width=10,
+                height=30,
+                corner_radius=8,
+                fg_color=("#dc2626", "#991b1b"),
+                hover_color=("#b91c1c", "#7f1d1d"),
+                command=self._confirm_clear_vault_from_gui,
+            ),
+        ]
 
         self.vault_scroll = ctk.CTkScrollableFrame(
             page,
@@ -2122,13 +2841,18 @@ class _ModernControlCenter:
             text_color=("#0f172a", "#f8fafc"),
         ).pack(anchor="w", padx=16, pady=(14, 2))
 
-        self._localized_widget(
-            ctk.CTkLabel,
-            hk_card,
-            translation_key="hotkey_section_desc",
-            font=self.font_small,
-            text_color=("#64748b", "#94a3b8"),
-        ).pack(anchor="w", padx=16, pady=(0, 10))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                hk_card,
+                translation_key="hotkey_section_desc",
+                font=self.font_small,
+                text_color=("#64748b", "#94a3b8"),
+                wraplength=680,
+                justify="left",
+            ),
+            lambda w: w - 56,
+        ).pack(anchor="w", fill="x", padx=16, pady=(0, 10))
 
         row_san = ctk.CTkFrame(hk_card, fg_color="transparent")
         row_san.pack(fill="x", padx=16, pady=(0, 8))
@@ -2141,14 +2865,17 @@ class _ModernControlCenter:
             text_color=("#0f172a", "#f8fafc"),
         ).pack(side="left")
 
-        self.combo_hk_sanitize = ctk.CTkComboBox(
+        self.combo_hk_sanitize = _HotkeyRecorderBox(
             row_san,
-            values=["alt+s", "ctrl+shift+s", "ctrl+alt+s", "alt+q", "f8", "ctrl+f8"],
-            width=150,
-            height=32,
+            value=self._saved_hk_sanitize or hk.get("sanitize", "alt+s"),
             font=self.font_mono,
+            listening_text=self._t("hk_box_listening"),
+            on_start_record=lambda: self._start_hotkey_recording("sanitize"),
+            on_manual_commit=lambda _val: self._save_and_apply_hotkeys(),
+            on_manual_cancel=lambda: self.status_var.set(self._t("msg_hk_cancelled")),
+            on_edit_state_changed=lambda editing: self._update_edit_button_visual("sanitize", editing),
+            width=210,
         )
-        self.combo_hk_sanitize.set(self._saved_hk_sanitize or hk.get("sanitize", "alt+s"))
         self.combo_hk_sanitize.pack(side="left", padx=(8, 8))
 
         self.btn_rec_san = self._localized_widget(
@@ -2156,15 +2883,29 @@ class _ModernControlCenter:
             row_san,
             translation_key="btn_hk_record",
             font=self.font_small,
-            width=120,
-            height=32,
+            width=126,
+            height=34,
             corner_radius=8,
             fg_color=("#e2e8f0", "#334155"),
             hover_color=("#cbd5e1", "#475569"),
             text_color=("#0f172a", "#f8fafc"),
             command=lambda: self._start_hotkey_recording("sanitize"),
         )
-        self.btn_rec_san.pack(side="left")
+        self.btn_rec_san.pack(side="left", padx=(0, 6))
+
+        self.btn_edit_san = ctk.CTkButton(
+            row_san,
+            text="✏️",
+            font=self.font_small,
+            width=36,
+            height=34,
+            corner_radius=8,
+            fg_color=("#e2e8f0", "#334155"),
+            hover_color=("#cbd5e1", "#475569"),
+            text_color=("#0f172a", "#f8fafc"),
+            command=lambda: self._toggle_manual_hotkey_edit("sanitize"),
+        )
+        self.btn_edit_san.pack(side="left")
 
         row_res = ctk.CTkFrame(hk_card, fg_color="transparent")
         row_res.pack(fill="x", padx=16, pady=(0, 10))
@@ -2177,14 +2918,17 @@ class _ModernControlCenter:
             text_color=("#0f172a", "#f8fafc"),
         ).pack(side="left")
 
-        self.combo_hk_restore = ctk.CTkComboBox(
+        self.combo_hk_restore = _HotkeyRecorderBox(
             row_res,
-            values=["alt+r", "ctrl+shift+r", "ctrl+alt+r", "alt+w", "f9", "ctrl+f9"],
-            width=150,
-            height=32,
+            value=self._saved_hk_restore or hk.get("restore", "alt+r"),
             font=self.font_mono,
+            listening_text=self._t("hk_box_listening"),
+            on_start_record=lambda: self._start_hotkey_recording("restore"),
+            on_manual_commit=lambda _val: self._save_and_apply_hotkeys(),
+            on_manual_cancel=lambda: self.status_var.set(self._t("msg_hk_cancelled")),
+            on_edit_state_changed=lambda editing: self._update_edit_button_visual("restore", editing),
+            width=210,
         )
-        self.combo_hk_restore.set(self._saved_hk_restore or hk.get("restore", "alt+r"))
         self.combo_hk_restore.pack(side="left", padx=(8, 8))
 
         self.btn_rec_res = self._localized_widget(
@@ -2192,15 +2936,29 @@ class _ModernControlCenter:
             row_res,
             translation_key="btn_hk_record",
             font=self.font_small,
-            width=120,
-            height=32,
+            width=126,
+            height=34,
             corner_radius=8,
             fg_color=("#e2e8f0", "#334155"),
             hover_color=("#cbd5e1", "#475569"),
             text_color=("#0f172a", "#f8fafc"),
             command=lambda: self._start_hotkey_recording("restore"),
         )
-        self.btn_rec_res.pack(side="left")
+        self.btn_rec_res.pack(side="left", padx=(0, 6))
+
+        self.btn_edit_res = ctk.CTkButton(
+            row_res,
+            text="✏️",
+            font=self.font_small,
+            width=36,
+            height=34,
+            corner_radius=8,
+            fg_color=("#e2e8f0", "#334155"),
+            hover_color=("#cbd5e1", "#475569"),
+            text_color=("#0f172a", "#f8fafc"),
+            command=lambda: self._toggle_manual_hotkey_edit("restore"),
+        )
+        self.btn_edit_res.pack(side="left")
 
         row_act = ctk.CTkFrame(hk_card, fg_color="transparent")
         row_act.pack(fill="x", padx=16, pady=(0, 14))
@@ -2208,23 +2966,9 @@ class _ModernControlCenter:
         self._localized_widget(
             ctk.CTkButton,
             row_act,
-            translation_key="btn_hk_save",
-            font=self.font_small,
-            width=130,
-            height=32,
-            corner_radius=8,
-            fg_color=("#059669", "#059669"),
-            hover_color=("#047857", "#047857"),
-            text_color="#ffffff",
-            command=self._save_and_apply_hotkeys,
-        ).pack(side="left", padx=(0, 8))
-
-        self._localized_widget(
-            ctk.CTkButton,
-            row_act,
             translation_key="btn_hk_reset",
             font=self.font_small,
-            width=105,
+            width=120,
             height=32,
             corner_radius=8,
             fg_color=("#e2e8f0", "#334155"),
@@ -2283,13 +3027,6 @@ class _ModernControlCenter:
 
         idle_row = ctk.CTkFrame(priv_card, fg_color="transparent")
         idle_row.pack(fill="x", padx=16, pady=(6, 14))
-        self._localized_widget(
-            ctk.CTkLabel,
-            idle_row,
-            translation_key="lbl_idle_wipe",
-            font=self.font_body,
-            text_color=("#0f172a", "#f8fafc"),
-        ).pack(side="left")
         self.combo_idle_wipe = ctk.CTkComboBox(
             idle_row,
             values=[self._idle_label(m) for m in VALID_IDLE_WIPE_MINUTES],
@@ -2300,7 +3037,18 @@ class _ModernControlCenter:
             command=self._on_idle_wipe_selected,
         )
         self.combo_idle_wipe.set(self._idle_label(self.sanitizer.idle_wipe_minutes))
-        self.combo_idle_wipe.pack(side="right")
+        self.combo_idle_wipe.pack(side="right", padx=(10, 0))
+        self._register_wrap_label(
+            self._localized_widget(
+                ctk.CTkLabel,
+                idle_row,
+                translation_key="lbl_idle_wipe",
+                font=self.font_body,
+                justify="left",
+                text_color=("#0f172a", "#f8fafc"),
+            ),
+            lambda w: w - 250,
+        ).pack(side="left", fill="x", expand=True)
 
     # ---------------- Page 6: Quick Guide ----------------
 
@@ -2510,6 +3258,10 @@ class _ModernControlCenter:
         if new_theme != self.theme_mode:
             self.theme_mode = new_theme
             ctk.set_appearance_mode("Light" if self.theme_mode == "light" else "Dark")
+            if hasattr(self, "btn_theme") and self.btn_theme.winfo_exists():
+                self.btn_theme.configure(
+                    text=self._t("btn_theme_light" if self.theme_mode == "dark" else "btn_theme_dark")
+                )
             self._configure_sandbox_highlight_tag()
         new_lang = self.sanitizer.language
         if new_lang != self.lang:
@@ -2529,6 +3281,13 @@ class _ModernControlCenter:
         self._show_page(page_key)
 
     def _show_page(self, page_key: str) -> None:
+        if page_key != "settings":
+            if self._recording_target is not None:
+                self._cancel_hotkey_recording()
+            for attr in ("combo_hk_sanitize", "combo_hk_restore"):
+                box = getattr(self, attr, None)
+                if box is not None and hasattr(box, "finish_manual_edit"):
+                    box.finish_manual_edit(commit=False)
         self._active_page_key = page_key
         for frame in self.pages.values():
             frame.pack_forget()
@@ -2545,6 +3304,7 @@ class _ModernControlCenter:
         sandbox_status = getattr(self, "_sandbox_status_texts", {})
         was_sandbox_status = previous_status == sandbox_status.get(previous_lang)
         self.lang = "en" if self.lang == "zh" else "zh"
+        self._in_language_toggle = True
         try:
             self._refresh_translations(add_category, filter_category)
             self.sanitizer.set_language(self.lang)
@@ -2556,6 +3316,8 @@ class _ModernControlCenter:
                 pass
             self.status_var.set(self._t("msg_operation_failed"))
             return
+        finally:
+            self._in_language_toggle = False
         if was_ready:
             self.status_var.set(self._ready_status_text())
         elif was_sandbox_status:
@@ -2617,6 +3379,8 @@ class _ModernControlCenter:
         if hasattr(self, "lbl_stat_rules"):
             active_r, total_r = self.sanitizer.active_rule_counts()
             self.lbl_stat_rules.configure(text=f"{active_r}/{total_r}")
+        if hasattr(self, "combo_idle_wipe"):
+            self.combo_idle_wipe.set(self._idle_label(self.sanitizer.idle_wipe_minutes))
         self._refresh_sidebar_status_label()
         self._update_idle_readout()
 
@@ -2646,7 +3410,12 @@ class _ModernControlCenter:
         self._vault_search_debounce_id = self.root.after(180, self.refresh_vault_list)
 
     def refresh_allowlist_and_rules_list(self) -> None:
-        self._rule_search_debounce_id = None
+        if self._rule_search_debounce_id is not None:
+            try:
+                self.root.after_cancel(self._rule_search_debounce_id)
+            except Exception:
+                pass
+            self._rule_search_debounce_id = None
         if hasattr(self, "allowlist_scroll"):
             for child in self.allowlist_scroll.winfo_children():
                 child.destroy()
@@ -2658,12 +3427,7 @@ class _ModernControlCenter:
                     height=30,
                 )
                 row.pack(fill="x", padx=4, pady=2)
-                ctk.CTkLabel(
-                    row,
-                    text=f"#{idx}  {item}",
-                    font=self.font_mono_sm,
-                    text_color=("#0f172a", "#f8fafc"),
-                ).pack(side="left", padx=8, pady=4)
+                # Pack delete button first so long allowlist values can never push it off-screen.
                 ctk.CTkButton(
                     row,
                     text="✕",
@@ -2676,6 +3440,13 @@ class _ModernControlCenter:
                     text_color=("#991b1b", "#fecaca"),
                     command=lambda val=item: self._remove_allowlist_from_gui(val),
                 ).pack(side="right", padx=6, pady=4)
+                ctk.CTkLabel(
+                    row,
+                    text=f"#{idx}  {item}",
+                    font=self.font_mono_sm,
+                    anchor="w",
+                    text_color=("#0f172a", "#f8fafc"),
+                ).pack(side="left", fill="x", expand=True, padx=8, pady=4)
 
         if hasattr(self, "rules_toggle_scroll"):
             for child in self.rules_toggle_scroll.winfo_children():
@@ -2798,13 +3569,6 @@ class _ModernControlCenter:
                 width=110,
             ).pack(side="left", padx=4, pady=5)
 
-            ctk.CTkLabel(
-                row_card,
-                text=word,
-                font=self.font_body,
-                text_color=("#0f172a", "#f8fafc"),
-            ).pack(side="left", padx=8, pady=5)
-
             ctk.CTkButton(
                 row_card,
                 text="✕",
@@ -2817,6 +3581,14 @@ class _ModernControlCenter:
                 text_color=("#991b1b", "#fecaca"),
                 command=lambda c=cat_key, w=word: self._delete_single_word(c, w),
             ).pack(side="right", padx=8, pady=5)
+
+            ctk.CTkLabel(
+                row_card,
+                text=word,
+                font=self.font_body,
+                anchor="w",
+                text_color=("#0f172a", "#f8fafc"),
+            ).pack(side="left", fill="x", expand=True, padx=8, pady=5)
 
     @staticmethod
     def _mask_secret(val: str) -> str:
@@ -2838,7 +3610,12 @@ class _ModernControlCenter:
         self.refresh_vault_list()
 
     def refresh_vault_list(self) -> None:
-        self._vault_search_debounce_id = None
+        if self._vault_search_debounce_id is not None:
+            try:
+                self.root.after_cancel(self._vault_search_debounce_id)
+            except Exception:
+                pass
+            self._vault_search_debounce_id = None
         for child in self.vault_scroll.winfo_children():
             child.destroy()
 
@@ -2857,14 +3634,15 @@ class _ModernControlCenter:
         if not filtered:
             ctk.CTkLabel(
                 self.vault_scroll,
-                text=self._t("vault_empty"),
+                text=self._format_hotkey_text(self._t("vault_empty")),
                 font=self.font_body,
+                wraplength=460,
+                justify="center",
                 text_color=("#64748b", "#94a3b8"),
-            ).pack(pady=40)
+            ).pack(padx=20, pady=40)
             return
 
         reveal = bool(self._reveal_vault_originals)
-        copy_label = self._t("btn_copy_ph")
         palette_dark = RISK_TAG_STYLES["dark"]
         palette_light = RISK_TAG_STYLES["light"]
         visible = filtered[: self._vault_render_limit]
@@ -2905,13 +3683,6 @@ class _ModernControlCenter:
             else:
                 display_orig = self._mask_secret_preview(orig)
 
-            ctk.CTkLabel(
-                row_card,
-                text=display_orig,
-                font=self.font_mono_sm,
-                text_color=("#0f172a", "#f8fafc"),
-            ).pack(side="left", padx=6, pady=6)
-
             ctk.CTkButton(
                 row_card,
                 text="✕",
@@ -2925,9 +3696,10 @@ class _ModernControlCenter:
                 command=lambda p=ph: self._remove_single_vault_mapping(p),
             ).pack(side="right", padx=(4, 8), pady=5)
 
-            ctk.CTkButton(
+            self._localized_widget(
+                ctk.CTkButton,
                 row_card,
-                text=copy_label,
+                translation_key="btn_copy_ph",
                 font=self.font_small,
                 width=72,
                 height=24,
@@ -2937,6 +3709,14 @@ class _ModernControlCenter:
                 text_color=("#0f172a", "#f8fafc"),
                 command=lambda p=ph: self._copy_text(p),
             ).pack(side="right", padx=2, pady=5)
+
+            ctk.CTkLabel(
+                row_card,
+                text=display_orig,
+                font=self.font_mono_sm,
+                anchor="w",
+                text_color=("#0f172a", "#f8fafc"),
+            ).pack(side="left", fill="x", expand=True, padx=6, pady=6)
 
         if len(filtered) > self._vault_render_limit:
             rem = len(filtered) - self._vault_render_limit
@@ -3030,7 +3810,7 @@ class _ModernControlCenter:
 
     def _export_encrypted_vault_from_gui(self) -> None:
         if self.sanitizer.vault.size == 0:
-            self.status_var.set(self._t("vault_empty"))
+            self.status_var.set(self._format_hotkey_text(self._t("vault_empty")))
             return
         passphrase = simpledialog.askstring(
             self._t("prompt_passphrase_title"),
@@ -3209,14 +3989,67 @@ class _ModernControlCenter:
 
     def _cancel_hotkey_recording(self) -> None:
         self._recording_target = None
-        try:
-            self.root.unbind("<KeyPress>")
-        except Exception:
-            pass
+        for seq in ("<KeyPress>", "<KeyRelease>"):
+            try:
+                self.root.unbind(seq)
+            except Exception:
+                pass
+        if hasattr(self, "combo_hk_sanitize") and hasattr(self.combo_hk_sanitize, "set_recording"):
+            self.combo_hk_sanitize.set_recording(False)
+        if hasattr(self, "combo_hk_restore") and hasattr(self.combo_hk_restore, "set_recording"):
+            self.combo_hk_restore.set_recording(False)
         if hasattr(self, "btn_rec_san"):
             self.btn_rec_san.configure(text=self._t("btn_hk_record"))
         if hasattr(self, "btn_rec_res"):
             self.btn_rec_res.configure(text=self._t("btn_hk_record"))
+
+    def _update_edit_button_visual(self, target: str, editing: bool) -> None:
+        attr = "btn_edit_san" if target == "sanitize" else "btn_edit_res"
+        btn = getattr(self, attr, None)
+        if btn is None:
+            return
+        try:
+            if not btn.winfo_exists():
+                return
+        except Exception:
+            return
+        if editing:
+            btn.configure(
+                text="✓",
+                fg_color=("#059669", "#059669"),
+                hover_color=("#047857", "#047857"),
+                text_color="#ffffff",
+            )
+        else:
+            btn.configure(
+                text="✏️",
+                fg_color=("#e2e8f0", "#334155"),
+                hover_color=("#cbd5e1", "#475569"),
+                text_color=("#0f172a", "#f8fafc"),
+            )
+
+    def _toggle_manual_hotkey_edit(self, target: str) -> None:
+        if platform.system() == "Darwin":
+            self.status_var.set(self._t("macos_preview_hotkeys"))
+            return
+        if getattr(self, "_recording_target", None) is not None:
+            self._cancel_hotkey_recording()
+        box = self.combo_hk_sanitize if target == "sanitize" else self.combo_hk_restore
+        other = self.combo_hk_restore if target == "sanitize" else self.combo_hk_sanitize
+        if getattr(box, "_editing", False):
+            typed = box._entry.get().strip().lower()
+            if not typed:
+                box.finish_manual_edit(commit=False)
+                self.status_var.set(self._t("msg_hk_cancelled"))
+            else:
+                self._save_and_apply_hotkeys()
+            return
+        if hasattr(other, "finish_manual_edit"):
+            other.finish_manual_edit(commit=False)
+        if hasattr(box, "start_manual_edit"):
+            box.start_manual_edit()
+            if getattr(box, "_editing", False):
+                self.status_var.set(self._t("hk_box_edit_hint"))
 
     def _start_hotkey_recording(self, target: str) -> None:
         if platform.system() == "Darwin":
@@ -3227,63 +4060,60 @@ class _ModernControlCenter:
             self.status_var.set(self._t("msg_hk_cancelled"))
             return
         self._cancel_hotkey_recording()
+        for box in (self.combo_hk_sanitize, self.combo_hk_restore):
+            if hasattr(box, "finish_manual_edit"):
+                box.finish_manual_edit(commit=False)
         self._recording_target = target
         if target == "sanitize":
             self.btn_rec_san.configure(text=self._t("btn_hk_recording"))
+            if hasattr(self.combo_hk_sanitize, "set_recording"):
+                self.combo_hk_sanitize.set_recording(True)
         else:
             self.btn_rec_res.configure(text=self._t("btn_hk_recording"))
+            if hasattr(self.combo_hk_restore, "set_recording"):
+                self.combo_hk_restore.set_recording(True)
         self.root.bind("<KeyPress>", self._on_hotkey_keypress)
+        self.root.bind("<KeyRelease>", self._on_hotkey_keyrelease)
         self.root.focus_force()
+
+    def _on_hotkey_keyrelease(self, event: tk.Event) -> str:
+        if not self._recording_target:
+            return "break"
+        mods, _token, _is_pure = normalize_tk_key_event(event)
+        keysym = str(getattr(event, "keysym", "") or "")
+        released_mod = _PURE_MODIFIER_KEYSYMS.get(keysym) or _PURE_MODIFIER_VKS.get(int(getattr(event, "keycode", 0) or 0))
+        if released_mod and released_mod in mods:
+            mods = [m for m in mods if m != released_mod]
+        box = self.combo_hk_sanitize if self._recording_target == "sanitize" else self.combo_hk_restore
+        if hasattr(box, "set_recording"):
+            preview = (" + ".join(m.upper() for m in mods) + " + ...") if mods else ""
+            box.set_recording(True, preview=preview)
+        return "break"
 
     def _on_hotkey_keypress(self, event: tk.Event) -> str:
         if not self._recording_target:
             return "break"
         keysym = str(getattr(event, "keysym", "") or "")
+        keycode = int(getattr(event, "keycode", 0) or 0)
         # Pressing Esc cancels recording instead of hijacking Escape globally!
-        if keysym.lower() in ("escape", "esc"):
+        if keysym.lower() in ("escape", "esc") or keycode == 0x1B:
             self._cancel_hotkey_recording()
             self.status_var.set(self._t("msg_hk_cancelled"))
             return "break"
 
-        ignore_pure_mods = {
-            "Shift_L", "Shift_R", "Control_L", "Control_R",
-            "Alt_L", "Alt_R", "Win_L", "Win_R", "Super_L", "Super_R", "Caps_Lock",
-        }
-        if keysym in ignore_pure_mods:
+        mods, key_token, is_pure_mod = normalize_tk_key_event(event)
+        box = self.combo_hk_sanitize if self._recording_target == "sanitize" else self.combo_hk_restore
+        if is_pure_mod or not key_token:
+            if hasattr(box, "set_recording") and mods:
+                box.set_recording(True, preview=" + ".join(m.upper() for m in mods) + " + ...")
             return "break"
 
-        state = int(getattr(event, "state", 0) or 0)
-        parts: List[str] = []
-        if state & 0x0004:
-            parts.append("ctrl")
-        if state & 0x20000 or state & 0x0008:
-            parts.append("alt")
-        if state & 0x0001:
-            parts.append("shift")
-
-        key_lower = keysym.lower()
-        if len(key_lower) == 1 and key_lower.isalnum():
-            key_token = key_lower
-        elif key_lower.startswith("f") and key_lower[1:].isdigit():
-            key_token = key_lower
-        elif key_lower in {"space", "tab", "return", "insert", "delete", "home", "end", "prior", "next"}:
-            key_token = {"return": "enter", "prior": "page up", "next": "page down"}.get(key_lower, key_lower)
-        else:
-            char_code = getattr(event, "keycode", 0)
-            if 65 <= char_code <= 90:
-                key_token = chr(char_code).lower()
-            elif 48 <= char_code <= 57:
-                key_token = chr(char_code)
-            else:
-                key_token = key_lower
-
         # Reject bare non-function keys so users cannot accidentally bind 'a' or 'space' globally.
-        if not parts and not re.fullmatch(r"f([1-9]|1[0-9]|2[0-4])", key_token):
+        if not mods and not re.fullmatch(r"f([1-9]|1[0-9]|2[0-4])", key_token):
             self.status_var.set(self._t("msg_hk_modifier_required"))
             return "break"
 
-        parts.append(key_token)
-        combo_str = "+".join(parts)
+        combo_str = "+".join(mods + [key_token])
         target = self._recording_target
         self._cancel_hotkey_recording()
 
@@ -3291,6 +4121,7 @@ class _ModernControlCenter:
             self.combo_hk_sanitize.set(combo_str)
         else:
             self.combo_hk_restore.set(combo_str)
+        self._save_and_apply_hotkeys()
         return "break"
 
     def _save_and_apply_hotkeys(self) -> None:
@@ -3299,13 +4130,31 @@ class _ModernControlCenter:
             return
         san_val = self.combo_hk_sanitize.get().strip().lower()
         res_val = self.combo_hk_restore.get().strip().lower()
+        if getattr(self, "_recording_target", None) is not None:
+            self._cancel_hotkey_recording()
         try:
             candidate = self.sanitizer.normalize_hotkeys(san_val, res_val)
             if self.on_reload_hotkeys:
                 if not self.on_reload_hotkeys(candidate):
-                    raise ValueError("Global hotkey registration failed")
+                    conflict_getter = getattr(self, "get_last_hotkey_conflict", None)
+                    conflict = conflict_getter() if callable(conflict_getter) else None
+                    err_text = (
+                        self._t("msg_hk_occupied").replace("{key}", str(conflict).upper())
+                        if conflict
+                        else self._t("msg_hk_err")
+                    )
+                    for box in (self.combo_hk_sanitize, self.combo_hk_restore):
+                        if hasattr(box, "finish_manual_edit"):
+                            box.finish_manual_edit(commit=False)
+                    self._sync_hotkey_inputs()
+                    self.status_var.set(err_text)
+                    messagebox.showwarning("Hotkey", err_text, parent=self.root)
+                    return
             else:
                 self.sanitizer.set_hotkeys(candidate["sanitize"], candidate["restore"])
+            for box in (self.combo_hk_sanitize, self.combo_hk_restore):
+                if hasattr(box, "finish_manual_edit"):
+                    box.finish_manual_edit(commit=True)
             updated = self.sanitizer.hotkeys
             self._refresh_hotkey_labels()
             msg = (
@@ -3315,36 +4164,100 @@ class _ModernControlCenter:
             )
             self.status_var.set(msg)
         except HotkeyRollbackError:
+            for box in (self.combo_hk_sanitize, self.combo_hk_restore):
+                if hasattr(box, "finish_manual_edit"):
+                    box.finish_manual_edit(commit=False)
+            self._sync_hotkey_inputs()
             self.status_var.set(self._t("msg_hk_rollback_err"))
             messagebox.showwarning("Hotkey", self._t("msg_hk_rollback_err"), parent=self.root)
         except Exception:
+            for box in (self.combo_hk_sanitize, self.combo_hk_restore):
+                if hasattr(box, "finish_manual_edit"):
+                    box.finish_manual_edit(commit=False)
+            self._sync_hotkey_inputs()
             self.status_var.set(self._t("msg_hk_err"))
             messagebox.showwarning("Hotkey", self._t("msg_hk_err"), parent=self.root)
 
+    def _sync_hotkey_inputs(self) -> None:
+        hk = self.sanitizer.hotkeys
+        if hasattr(self, "combo_hk_sanitize") and not getattr(self.combo_hk_sanitize, "_recording", False):
+            self.combo_hk_sanitize.set(hk.get("sanitize", "alt+s"))
+        if hasattr(self, "combo_hk_restore") and not getattr(self.combo_hk_restore, "_recording", False):
+            self.combo_hk_restore.set(hk.get("restore", "alt+r"))
+
     def _reset_default_hotkeys(self) -> None:
-        self.combo_hk_sanitize.set("alt+s")
-        self.combo_hk_restore.set("alt+r")
-        self._save_and_apply_hotkeys()
+        if platform.system() == "Darwin":
+            self.status_var.set(self._t("macos_preview_hotkeys"))
+            return
+        if getattr(self, "_recording_target", None) is not None:
+            self._cancel_hotkey_recording()
+        for box in (self.combo_hk_sanitize, self.combo_hk_restore):
+            if hasattr(box, "finish_manual_edit"):
+                box.finish_manual_edit(commit=False)
+        if not self.on_reload_hotkeys:
+            self.combo_hk_sanitize.set("alt+s")
+            self.combo_hk_restore.set("alt+r")
+            self._save_and_apply_hotkeys()
+            return
+
+        conflict_getter = getattr(self, "get_last_hotkey_conflict", None)
+        first_conflict: Optional[str] = None
+        for idx, (san_cand, res_cand) in enumerate(_DEFAULT_HOTKEY_CANDIDATES):
+            try:
+                ok = bool(self.on_reload_hotkeys({"sanitize": san_cand, "restore": res_cand}))
+            except HotkeyRollbackError:
+                self._sync_hotkey_inputs()
+                self.status_var.set(self._t("msg_hk_rollback_err"))
+                messagebox.showwarning("Hotkey", self._t("msg_hk_rollback_err"), parent=self.root)
+                return
+            if ok:
+                self._refresh_hotkey_labels()
+                updated = self.sanitizer.hotkeys
+                if idx == 0:
+                    msg = (
+                        self._t("msg_hk_saved")
+                        .replace("{san}", updated["sanitize"].upper())
+                        .replace("{res}", updated["restore"].upper())
+                    )
+                else:
+                    msg = (
+                        self._t("msg_hk_reset_fallback")
+                        .replace("{conflict}", (first_conflict or "alt+r").upper())
+                        .replace("{san}", updated["sanitize"].upper())
+                        .replace("{res}", updated["restore"].upper())
+                    )
+                self.status_var.set(msg)
+                return
+            if idx == 0 and callable(conflict_getter):
+                first_conflict = conflict_getter()
+
+        self._sync_hotkey_inputs()
+        err_text = (
+            self._t("msg_hk_occupied").replace("{key}", str(first_conflict).upper())
+            if first_conflict
+            else self._t("msg_hk_err")
+        )
+        self.status_var.set(err_text)
+        messagebox.showwarning("Hotkey", err_text, parent=self.root)
 
     def _refresh_hotkey_labels(self) -> None:
-        hk = self.sanitizer.hotkeys
-        san_disp = hk.get("sanitize", "alt+s").upper()
-        res_disp = hk.get("restore", "alt+r").upper()
+        self._sync_hotkey_inputs()
         if hasattr(self, "btn_hero_san"):
             self.btn_hero_san.configure(
-                text=re.sub(r"\(Alt\s*\+\s*S\)", f"({san_disp})", self._t("btn_hero_sanitize"))
+                text=self._format_hotkey_text(self._t("btn_hero_sanitize"))
             )
         if hasattr(self, "btn_hero_res"):
             self.btn_hero_res.configure(
-                text=re.sub(r"\(Alt\s*\+\s*R\)", f"({res_disp})", self._t("btn_hero_restore"))
+                text=self._format_hotkey_text(self._t("btn_hero_restore"))
             )
         if hasattr(self, "lbl_workflow"):
-            wf_text = (
-                f"{self._t('workflow_title')}：{self._t('workflow_steps')}"
-                .replace("Alt+S", san_disp)
-                .replace("Alt+R", res_disp)
+            self.lbl_workflow.configure(
+                text=self._format_hotkey_text(f"{self._t('workflow_title')}：{self._t('workflow_steps')}")
             )
-            self.lbl_workflow.configure(text=wf_text)
+        if hasattr(self, "lbl_side_status"):
+            self._refresh_sidebar_status_label()
+        if hasattr(self, "vault_scroll") and self.sanitizer.vault.size == 0:
+            self.refresh_vault_list()
         if hasattr(self, "guide_box"):
             position = self.guide_box.yview()[0]
             self.guide_box.configure(state="normal")
@@ -3352,6 +4265,12 @@ class _ModernControlCenter:
             self.guide_box.insert("1.0", self._guide_text())
             self.guide_box.configure(state="disabled")
             self.guide_box.yview_moveto(position)
+        if not getattr(self, "_in_language_toggle", False) and getattr(self, "_last_layout_logical_w", 0) > 0:
+            if hasattr(self, "lbl_workflow"):
+                self.lbl_workflow._aps_last_wrap = None
+            if hasattr(self, "home_btn_row"):
+                self.home_btn_row.update_idletasks()
+            self._apply_responsive_layout(self._last_layout_logical_w, force=True)
 
     def _highlight_placeholders_in_output(self) -> None:
         inner_text = getattr(self.sandbox_output, "_textbox", None)
@@ -3454,6 +4373,8 @@ class _ModernControlCenter:
         self._highlight_placeholders_in_output()
         self._render_sandbox_category_pills(res.category_counts)
         if not use_isolated:
+            if self.on_state_changed:
+                self.on_state_changed()
             self.refresh_all()
         self._sandbox_status_texts = {lang: res.format_summary(lang) for lang in ("zh", "en")}
         self.status_var.set(self._sandbox_status_texts[self.lang])
@@ -3491,6 +4412,12 @@ class _ModernControlCenter:
             self._copy_text(out)
 
     def _clear_sandbox(self) -> None:
+        if self._sandbox_debounce_id is not None:
+            try:
+                self.root.after_cancel(self._sandbox_debounce_id)
+            except Exception:
+                pass
+            self._sandbox_debounce_id = None
         self.sandbox_input.delete("1.0", "end")
         self.sandbox_output.delete("1.0", "end")
         if getattr(self, "_sandbox_vault", None) is not None:

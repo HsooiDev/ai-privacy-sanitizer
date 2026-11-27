@@ -282,6 +282,28 @@ def test_isolated_sandbox_vault_and_merge(tmp_path: Path):
     assert sanitizer.restore(res.sanitized_text).restored_text == "secret_key=TopSecretSandbox99"
 
 
+def test_merge_from_preserves_tag_style_and_avoids_alias_collisions(tmp_path: Path):
+    pytest.importorskip("cryptography")
+    sanitizer = _make_sanitizer(tmp_path)
+    sanitizer.sanitize("api_key=PrimaryKey11111")  # <API_KEY_1>
+
+    sandbox = SessionVault()
+    sanitizer.sanitize("api_key=SandboxKey22222 api_key=SandboxKey33333", vault=sandbox)  # <API_KEY_1>, <API_KEY_2>
+
+    merged = sanitizer.vault.merge_from(sandbox)
+    assert merged == 2
+    phs = sorted(ph for ph, _orig, _cat in sanitizer.vault.snapshot_placeholders())
+    assert len(phs) == 3
+    assert all(p.startswith("<API_KEY_") and p.endswith(">") for p in phs)
+
+    vault_file = tmp_path / "merged.vault.json"
+    sanitizer.vault.save_to_file(vault_file, passphrase="MergePass#2026")
+    sanitizer.vault.clear()
+    assert sanitizer.vault.size == 0
+    sanitizer.vault.load_from_file(vault_file, passphrase="MergePass#2026")
+    assert sanitizer.vault.size == 3
+
+
 def test_tray_states_idle_wipe_zero_restore_and_copy_to_clipboard(tmp_path: Path):
     sanitizer = _make_sanitizer(tmp_path, {"idle_wipe_minutes": 1})
     app = SanitizerTrayApp(sanitizer=sanitizer)

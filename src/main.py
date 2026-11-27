@@ -206,6 +206,7 @@ class SanitizerTrayApp:
         self._last_activity_ts: float = time.monotonic()
         self._last_tray_state: str = ""
         self._windows_hotkeys = None
+        self._last_hotkey_conflict: Optional[str] = None
         self.gui = GuiController(
             sanitizer=self.sanitizer,
             icon_factory=create_shield_lock_icon,
@@ -220,6 +221,7 @@ class SanitizerTrayApp:
             on_copy_to_clipboard=self.copy_to_clipboard,
             on_state_changed=self._update_tray_icon_state,
             get_idle_seconds_left=self.get_idle_seconds_remaining,
+            get_last_hotkey_conflict=lambda: self._last_hotkey_conflict,
         )
 
     def _t(self, key: str) -> str:
@@ -267,11 +269,16 @@ class SanitizerTrayApp:
 
     def notify(self, message: str, title: str = APP_NAME, *, tone: str = "info") -> None:
         """Send a non-intrusive Micro-HUD toast (if enabled) plus desktop Toast notification."""
-        if self.sanitizer.hud_enabled and hasattr(self, "gui") and self.gui is not None:
+        if hasattr(self, "gui") and self.gui is not None:
             try:
-                self.gui.show_hud(title, message, tone=tone)
+                self.gui.set_status(message)
             except Exception:
                 pass
+            if self.sanitizer.hud_enabled:
+                try:
+                    self.gui.show_hud(title, message, tone=tone)
+                except Exception:
+                    pass
         if self.icon is None:
             return
         notified = False
@@ -545,6 +552,7 @@ class SanitizerTrayApp:
         if platform.system() == "Darwin":
             # keyboard's current Darwin backend requires root. Keep the preview unprivileged.
             return False
+        self._last_hotkey_conflict = None
         hotkeys = self.sanitizer.hotkeys if hotkeys is None else hotkeys
         sanitize_key = hotkeys.get("sanitize", "alt+s")
         restore_key = hotkeys.get("restore", "alt+r")
@@ -562,6 +570,7 @@ class SanitizerTrayApp:
                 try:
                     candidate.start()
                 except Exception:
+                    self._last_hotkey_conflict = getattr(candidate, "failed_binding", None)
                     if previous is not None:
                         previous.start()
                     raise
@@ -635,15 +644,41 @@ class SanitizerTrayApp:
         self.refresh_tray_i18n()
         return True
 
+    def _register_startup_hotkeys(self) -> Optional[str]:
+        """Bind startup hotkeys, automatically falling back on Windows GPU overlay Alt+R conflicts."""
+        if platform.system() == "Darwin":
+            return self._t("macos_preview_hotkeys")
+        if self.register_hotkeys():
+            return None
+        first_conflict = self._last_hotkey_conflict
+        if self.sanitizer.hotkeys == {"sanitize": "alt+s", "restore": "alt+r"}:
+            for san_c, res_c in (
+                ("alt+s", "ctrl+shift+r"),
+                ("ctrl+shift+s", "ctrl+shift+r"),
+                ("ctrl+alt+s", "ctrl+alt+r"),
+            ):
+                try:
+                    ok = self.reload_hotkeys({"sanitize": san_c, "restore": res_c})
+                except Exception:
+                    ok = False
+                if ok:
+                    updated = self.sanitizer.hotkeys
+                    return (
+                        self._t("msg_hk_reset_fallback")
+                        .replace("{conflict}", (first_conflict or "alt+r").upper())
+                        .replace("{san}", updated["sanitize"].upper())
+                        .replace("{res}", updated["restore"].upper())
+                    )
+        if first_conflict:
+            return self._t("msg_hk_occupied").replace("{key}", first_conflict.upper())
+        return self._t("msg_hk_err")
+
     def run(self, show_gui_on_start: bool = False) -> None:
         """Start global hotkeys, cruise watcher, background system tray icon, and main-thread GUI loop."""
         import pystray
         from pystray import Menu, MenuItem
 
-        if platform.system() == "Darwin":
-            self.gui.startup_status = self._t("macos_preview_hotkeys")
-        else:
-            self.gui.startup_status = None if self.register_hotkeys() else self._t("msg_hk_err")
+        self.gui.startup_status = self._register_startup_hotkeys()
         self._start_clipboard_cruise_watcher()
 
         initial_state = self._compute_tray_state()
