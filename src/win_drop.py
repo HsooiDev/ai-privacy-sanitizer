@@ -16,7 +16,8 @@ GWLP_WNDPROC = -4
 GA_ROOT = 2
 
 LONG_PTR = ctypes.c_ssize_t
-WNDPROC = ctypes.WINFUNCTYPE(LONG_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+_FUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+WNDPROC = _FUNCTYPE(LONG_PTR, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 
 class _WinDropAPI:

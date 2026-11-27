@@ -577,6 +577,8 @@ def test_windows_clipboard_watcher_lifecycle_and_dispatch() -> None:
     watcher = WindowsClipboardWatcher(lambda: events.append(api.seq), api=api)
     watcher.start()
     assert api.added == [7777]
+    if watcher._thread is not None:
+        watcher._thread.join(2)
     assert api.removed == [7777]
 
     # Duplicate sequence number ignored; new sequence number triggers callback
@@ -775,6 +777,8 @@ Promise.resolve(restoreBtn.listeners['click'][0]()).then(() => {
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -813,6 +817,8 @@ def test_cli_readonly_scanner_and_git_staged_never_prints_plaintext(tmp_path: Pa
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert proc_hit.returncode == 1
@@ -823,6 +829,8 @@ def test_cli_readonly_scanner_and_git_staged_never_prints_plaintext(tmp_path: Pa
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert proc_clean.returncode == 0
@@ -832,6 +840,8 @@ def test_cli_readonly_scanner_and_git_staged_never_prints_plaintext(tmp_path: Pa
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert proc_missing.returncode == 2
@@ -1093,7 +1103,7 @@ for (const fn of (doc.listeners['keydown'] || [])) fn({ key: 'Escape' });
 assert.strictEqual(docBody.children.filter(c => c.shadowRoot).length, 0, 'Escape must dismiss restore pill');
 console.log('EDGE_OK');
 """
-    proc = subprocess.run(["node", "-e", node_edge], cwd=str(REPO_ROOT), capture_output=True, text=True, check=False)
+    proc = subprocess.run(["node", "-e", node_edge], cwd=str(REPO_ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "EDGE_OK" in proc.stdout
 
