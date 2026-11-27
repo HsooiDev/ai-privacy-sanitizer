@@ -452,3 +452,48 @@ def test_bilingual_home_text_dimensions_do_not_grow_when_english_is_selected(win
             assert (widget.winfo_width(), widget.winfo_height(),
                     label.winfo_width(), label.winfo_height()) == dimensions, key
         assert win.sanitizer.hotkeys == {'sanitize':'alt+s', 'restore':'ctrl+shift+r'}
+
+
+def test_stable_ctk_retries_transient_windows_init_tcl_no_error(monkeypatch):
+    import src.gui as gui_mod
+
+    monkeypatch.setattr(gui_mod.sys, "platform", "win32")
+    sleeps = []
+    monkeypatch.setattr(gui_mod.time, "sleep", sleeps.append)
+
+    calls = 0
+
+    def fake_init(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        self.tk = None
+        if calls < 3:
+            raise tk.TclError(
+                'Can\'t find a usable init.tcl in the following directories:\n'
+                'C:/tcl/tcl8.6/init.tcl: couldn\'t read file "C:/tcl/tcl8.6/init.tcl": No error'
+            )
+        self.tk = object()
+
+    monkeypatch.setattr(ctk.CTk, "__init__", fake_init)
+    root = _StableCTk()
+    assert calls == 3
+    assert len(sleeps) == 2
+    assert root.tk is not None
+
+
+def test_stable_ctk_does_not_retry_non_transient_tcl_error(monkeypatch):
+    import src.gui as gui_mod
+
+    monkeypatch.setattr(gui_mod.sys, "platform", "win32")
+    calls = 0
+
+    def fake_init(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        self.tk = None
+        raise tk.TclError("no display name and no $DISPLAY environment variable")
+
+    monkeypatch.setattr(ctk.CTk, "__init__", fake_init)
+    with pytest.raises(tk.TclError, match="no display name"):
+        _StableCTk()
+    assert calls == 1

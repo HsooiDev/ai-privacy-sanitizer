@@ -1,6 +1,7 @@
 """Modern Dark/Light Bilingual Sidebar GUI Control Center using CustomTkinter."""
 
 import ctypes
+import gc
 import io
 import json
 import math
@@ -9,7 +10,9 @@ import platform
 import queue
 import re
 import subprocess
+import sys
 import threading
+import time
 import weakref
 import tkinter as tk
 import tkinter.font as tkfont
@@ -64,6 +67,14 @@ def _platform_font_families() -> Tuple[str, str]:
     return "DejaVu Sans", "DejaVu Sans Mono"
 
 
+def _is_transient_windows_tcl_init_error(exc: BaseException) -> bool:
+    """Return True when Windows Tk/Tcl raises the transient init.tcl 'No error' race."""
+    if sys.platform != "win32" or not isinstance(exc, tk.TclError):
+        return False
+    msg = str(exc).lower()
+    return "init.tcl" in msg and "no error" in msg
+
+
 class _StableCTk(ctk.CTk):
     """Apply the Windows titlebar color without CustomTkinter's withdraw/deiconify cycle."""
 
@@ -71,7 +82,19 @@ class _StableCTk(ctk.CTk):
         if not hasattr(ctypes, "windll"):
             ctk.deactivate_automatic_dpi_awareness()
         kwargs.setdefault("fg_color", ("#f1f5f9", "#0b0f19"))
-        super().__init__(*args, **kwargs)
+        for attempt in range(5):
+            try:
+                super().__init__(*args, **kwargs)
+                return
+            except tk.TclError as exc:
+                if (
+                    attempt == 4
+                    or getattr(self, "tk", None) is not None
+                    or not _is_transient_windows_tcl_init_error(exc)
+                ):
+                    raise
+                gc.collect()
+                time.sleep(0.05 * (attempt + 1))
 
     def _windows_set_titlebar_color(self, color_mode: str) -> None:
         if platform.system() != "Windows":
