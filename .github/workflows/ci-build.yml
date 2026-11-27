@@ -57,6 +57,9 @@ jobs:
       - name: Check Web restoration and masked preview boundaries
         run: node tests/test_web_security.cjs
 
+      - name: Verify Python and Web rule parity
+        run: python scripts/sync_web_rules.py --check
+
       - name: Run CLI self-test
         run: python -m src.main --self-test
 
@@ -90,7 +93,7 @@ jobs:
 
       - name: Package standalone windowed Sanitizer.exe
         run: |
-          pyinstaller --noconfirm AI-Privacy-Sanitizer.spec
+          python -m PyInstaller --noconfirm AI-Privacy-Sanitizer.spec
 
       - name: Record source revision and asset checksums
         shell: pwsh

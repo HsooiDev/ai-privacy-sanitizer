@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sanitizer Paste Guard</title>
+  <style>
+    body { width: 300px; margin: 0; padding: 14px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; background: #0f172a; color: #f8fafc; font-size: 13px; }
+    .hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .title { font-weight: 700; font-size: 15px; }
+    .badge { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: #064e3b; color: #6ee7b7; border: 1px solid #10b981; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+    .row { display: flex; align-items: center; justify-content: space-between; }
+    textarea { width: 100%; min-height: 70px; margin-top: 6px; padding: 8px; border-radius: 7px; border: 1px solid #334155; background: #0b0f19; color: #f8fafc; font-family: Consolas, monospace; font-size: 12px; box-sizing: border-box; }
+    button { width: 100%; padding: 7px 10px; border-radius: 8px; border: none; font-weight: 700; cursor: pointer; font-size: 12px; margin-top: 6px; }
+    .btn-blue { background: #2563eb; color: #fff; }
+    .btn-red { background: #991b1b; color: #fff; }
+    .muted { font-size: 11px; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <span class="title">🛡️ Sanitizer</span>
+    <span class="badge">Zero Permissions</span>
+  </div>
+  <div class="card">
+    <div class="row">
+      <span>粘贴瞬间敏感拦截</span>
+      <input type="checkbox" id="chkGuard" checked />
+    </div>
+    <div class="muted" id="lblVault" style="margin-top:6px;">当前标签页内存映射: 0 组</div>
+  </div>
+  <div class="card">
+    <div style="font-weight:600;">🔄 还原 AI 回复中的占位符</div>
+    <textarea id="txtRestore" placeholder="粘贴含占位符的 AI 回复，点击下方原地还原..."></textarea>
+    <button class="btn-blue" id="btnRestore">还原真实数据（仅本机内存）</button>
+    <button class="btn-red" id="btnClear">🔥 清空当前标签页映射</button>
+  </div>
+  <div class="muted">零网络权限 · 零持久化落盘 · 关闭标签页即焚</div>
+  <script src="popup.js"></script>
+</body>
+</html>

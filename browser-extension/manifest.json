@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Sanitizer — AI Privacy Paste Guard",
+  "version": "0.5.0",
+  "description": "100% local, zero-network paste guard that detects and sanitizes secrets before they reach AI chat prompts.",
+  "permissions": [],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Sanitizer Paste Guard"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://chat.deepseek.com/*",
+        "https://poe.com/*"
+      ],
+      "js": ["sanitizer_core.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

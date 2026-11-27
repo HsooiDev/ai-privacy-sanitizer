@@ -1,0 +1,77 @@
+{
+  "description": "Shared cross-platform golden test cases verified identically against Python (src/rules.py) and Web (web/index.html).",
+  "cases": [
+    {
+      "name": "redis_uri_password_with_at_sign",
+      "input": "REDIS_URL=\"redis://:R3disP@ssw0rd99@192.168.10.45:6379/0\"",
+      "must_not_contain": ["R3disP", "ssw0rd99", "192.168.10.45"],
+      "must_contain": ["redis://:[DB_PASS_1]@[PRIVATE_IP_1]:6379/0"]
+    },
+    {
+      "name": "http_basic_auth_header",
+      "input": "Authorization: Basic YWRtaW46UzNjcjN0UGFzczg4",
+      "must_not_contain": ["YWRtaW46UzNjcjN0UGFzczg4"],
+      "must_contain": ["Authorization: Basic <API_KEY_1>"]
+    },
+    {
+      "name": "pgp_private_key_block",
+      "input": "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBGTestKeyBody12345\n-----END PGP PRIVATE KEY BLOCK-----",
+      "must_not_contain": ["lQOYBGTestKeyBody12345"],
+      "must_contain": ["<PRIVATE_KEY_1>"]
+    },
+    {
+      "name": "compressed_ipv6_addresses",
+      "input": "Nodes: 2001:db8::8a2e:370:7334 and 2001:db8::1 and ::ffff:192.0.2.128",
+      "must_not_contain": ["8a2e:370:7334", "2001:db8::1", "192.0.2.128"],
+      "must_contain": ["[IPV6_1]", "[IPV6_2]", "[IPV6_3]"]
+    },
+    {
+      "name": "public_ipv4_ending_in_zero_and_version_ignored",
+      "input": "Subnet: 45.33.32.0/24 Release: v1.2.3.4",
+      "must_not_contain": ["45.33.32.0"],
+      "must_contain": ["[PUBLIC_IP_1]/24", "v1.2.3.4"]
+    },
+    {
+      "name": "user_paths_without_trailing_slash_and_unicode",
+      "input": "HOME=C:\\Users\\alice_dev MAC=/Users/张三 LINUX=/home/bob_ops",
+      "must_not_contain": ["alice_dev", "张三", "bob_ops"],
+      "must_contain": ["C:\\Users\\[USER_PATH_1]", "/Users/[USER_PATH_2]", "/home/[USER_PATH_3]"]
+    },
+    {
+      "name": "webhook_preserves_host_prefix",
+      "input": "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+      "must_not_contain": ["T00000000", "XXXXXXXXXXXXXXXXXXXXXXXX"],
+      "must_contain": ["https://hooks.slack.com/services/<API_KEY_1>"]
+    },
+    {
+      "name": "bank_cards_amex_and_invalid_luhn",
+      "input": "Amex: 3782-822463-10005 InvalidOrder: 4111-1111-1111-1112",
+      "must_not_contain": ["3782-822463-10005"],
+      "must_contain": ["[BANK_CARD_1]", "4111-1111-1111-1112"]
+    },
+    {
+      "name": "cn_id_checksum_validation",
+      "input": "ValidCN: 11010519491231002X FakeCN: 110105199002319999",
+      "must_not_contain": ["11010519491231002X"],
+      "must_contain": ["[ID_CARD_1]", "110105199002319999"]
+    },
+    {
+      "name": "url_query_preserves_other_params",
+      "input": "https://api.svc.io/v1/data?api_key=mysecret12345&page=2&lang=en",
+      "must_not_contain": ["mysecret12345"],
+      "must_contain": ["api_key=<API_KEY_1>&page=2&lang=en"]
+    },
+    {
+      "name": "normal_code_zero_false_positives",
+      "input": "compass = 1234, bypass = 99, spin = 100, highpass = 500",
+      "must_not_contain": ["[DB_PASS_1]"],
+      "must_contain": ["compass = 1234, bypass = 99, spin = 100, highpass = 500"]
+    },
+    {
+      "name": "intl_phone_and_my_landline",
+      "input": "MY: +60 3-2145 6789 SG: +65 9123 4567",
+      "must_not_contain": ["+60 3-2145 6789", "+65 9123 4567"],
+      "must_contain": ["[PHONE_1]", "[PHONE_2]"]
+    }
+  ]
+}

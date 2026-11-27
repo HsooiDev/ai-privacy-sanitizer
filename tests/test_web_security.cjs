@@ -298,3 +298,108 @@ test('Copy Output waits for completion and reports asynchronous and legacy failu
   assert(status.textContent.includes('已复制'));
   assert.equal(output.style.display, 'none');
 });
+
+test('strict zero-network CSP header is enforced and no browser storage APIs appear', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8');
+  const cspMatch = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i);
+  assert(cspMatch, 'Missing Content-Security-Policy meta tag');
+  const csp = cspMatch[1];
+  assert(csp.includes("default-src 'none'"));
+  assert(csp.includes("connect-src 'none'"));
+  assert(csp.includes("form-action 'none'"));
+  assert(!/\blocalStorage\s*[\[.]|\bsessionStorage\s*[\[.]|\bdocument\.cookie\b|\bindexedDB\b/.test(html));
+});
+
+test('oversize input fails closed on both sanitize and restore', () => {
+  const web = loadWeb();
+  const huge = 'a'.repeat(web.MAX_SANITIZE_CHARS + 1);
+  web.document.getElementById('txtInput').value = huge;
+  web.document.getElementById('txtOutput').value = 'stale-value';
+  web.runSanitizePreview();
+  assert.equal(web.document.getElementById('txtOutput').value, '');
+  assert(web.document.getElementById('lblStatus').textContent.includes('上限'));
+  const restoreRes = web.restoreText(huge);
+  assert.equal(restoreRes.oversize, true);
+  assert.equal(restoreRes.count, 0);
+});
+
+test('zero-restore status never claims real secrets were restored', () => {
+  const web = loadWeb();
+  web.document.getElementById('txtOutput').value = 'plain harmless text';
+  web.runRestorePreview();
+  const status = web.document.getElementById('lblStatus').textContent;
+  assert(!status.includes('真实数据'));
+  assert(status.includes('未发现'));
+});
+
+test('toggleLanguage translates CSP badge, banner, select options, and restore-allowlist button', () => {
+  const web = loadWeb();
+  web.toggleLanguage(); // zh -> en
+  assert(web.document.getElementById('lblCspBadge').textContent.includes('Zero-Network'));
+  assert(web.document.getElementById('lblSecBanner').innerHTML.includes('Zero-Storage'));
+  assert.equal(web.document.getElementById('optCatCompany').textContent, 'COMPANY');
+  assert(web.document.getElementById('btnRestoreAllow').textContent.includes('Restore Default'));
+  assert(web.document.getElementById('lblStatus').textContent.includes('Ready'));
+  web.toggleLanguage(); // en -> zh
+  assert(web.document.getElementById('lblCspBadge').textContent.includes('零外联'));
+  assert(web.document.getElementById('optCatCompany').textContent.includes('公司'));
+  assert(web.document.getElementById('btnRestoreAllow').textContent.includes('恢复默认'));
+});
+
+test('diff preview respects semantic boundaries and click-to-allowlist unmasks cleanly', () => {
+  const web = loadWeb();
+  web.document.getElementById('chkSemanticIp').checked = true;
+  web.document.getElementById('txtInput').value = 'host=10.5.6.7';
+  web.runSanitizePreview();
+  const maskedIp = web.document.getElementById('txtOutput').value.split('=')[1];
+  assert.equal(maskedIp, '192.0.2.101');
+  // Boundary-safe diff must NOT wrap the prefix inside 192.0.2.1010
+  web.renderDiffPreview('other=192.0.2.1010 real=' + maskedIp);
+  const diffHtml = web.document.getElementById('diffPreviewBox').innerHTML;
+  assert(diffHtml.includes('other=192.0.2.1010 '));
+  assert(diffHtml.includes('data-ph="192.0.2.101"'));
+  // Click delegation on diff chip adds original value to allowlist and re-sanitizes
+  const diffBox = web.document.getElementById('diffPreviewBox');
+  diffBox.listeners.click({ target: { getAttribute: (k) => (k === 'data-ph' ? maskedIp : null) } });
+  assert(web.allowlistItems.includes('10.5.6.7'));
+  assert.equal(web.document.getElementById('txtOutput').value, 'host=10.5.6.7');
+});
+
+test('restoreDefaultAllowlist repopulates safe defaults after wipeAllMemory', () => {
+  const web = loadWeb();
+  web.wipeAllMemory();
+  assert.equal(web.allowlistItems.length, 0);
+  web.restoreDefaultAllowlist();
+  assert(web.allowlistItems.includes('127.0.0.1'));
+  assert(web.allowlistItems.includes('localhost'));
+});
+
+test('AI prompt hint prepends preservation instruction and strips cleanly on restore', () => {
+  const web = loadWeb();
+  web.document.getElementById('chkAiHint').checked = true;
+  const raw = 'Connect to 10.1.2.3 using password=MySecretPass99';
+  const san = web.sanitizeText(raw);
+  assert(san.text.startsWith(web.AI_PROMPT_HINTS.zh) || san.text.startsWith(web.AI_PROMPT_HINTS.en));
+  assert(!san.text.includes('MySecretPass99'));
+  const restored = web.restoreText(san.text);
+  assert.equal(restored.text, raw);
+});
+
+test('shared cross-platform golden rules fixture passes identically in Web engine', () => {
+  const golden = JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'fixtures/rules_golden_cases.json'), 'utf8')
+  );
+  for (const item of golden.cases) {
+    const web = loadWeb();
+    web.customDict = {};
+    const san = web.sanitizeText(item.input);
+    for (const forbidden of (item.must_not_contain || [])) {
+      assert(!san.text.includes(forbidden), `${item.name}: leaked ${forbidden} in ${san.text}`);
+    }
+    for (const required of (item.must_contain || [])) {
+      assert(san.text.includes(required), `${item.name}: missing ${required} in ${san.text}`);
+    }
+    assert.equal(web.restoreText(san.text).text, item.input, `${item.name}: roundtrip failed`);
+  }
+});
+

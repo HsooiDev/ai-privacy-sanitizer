@@ -3,6 +3,11 @@
   "theme": "dark",
   "semantic_ip_mode": false,
   "auto_sanitize_clipboard": false,
+  "ai_prompt_hint": false,
+  "custom_word_whole_word": true,
+  "idle_wipe_minutes": 30,
+  "hud_enabled": true,
+  "clipboard_privacy_guard": true,
   "hotkeys": {
     "sanitize": "alt+s",
     "restore": "alt+r"

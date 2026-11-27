@@ -1,4 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(SPECPATH)))
+
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.win32.versioninfo import (
     VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct,
@@ -38,7 +43,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['pytest', 'unittest', 'pdb', 'pydoc'],
+    excludes=['pytest', 'unittest', 'pdb', 'pydoc', 'keyboard'],
     noarchive=False,
     optimize=0,
 )
@@ -55,7 +60,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

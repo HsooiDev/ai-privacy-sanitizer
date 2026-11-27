@@ -30,9 +30,8 @@ dist/
 build/
 *.egg-info/
 
-# Keep the verified standalone EXE, PyInstaller specs, and app icon available for download
+# Keep PyInstaller specs and app icon tracked; release binaries are distributed via GitHub Releases
 *.exe
-!Sanitizer.exe
 *.spec
 !AI-Privacy-Sanitizer.spec
 !AI-Privacy-Sanitizer-macOS.spec
