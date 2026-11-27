@@ -10,12 +10,25 @@ import re
 import secrets
 import sys
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Pattern, Tuple
 
-from src.rules import BUILTIN_RULES, SanitizeRule
+from src.rules import BUILTIN_RULES, RULE_PRESETS, SanitizeRule
 from src.secure_io import atomic_write_private, validate_private_path
+from src.vault_crypto import (
+    decrypt_vault_payload,
+    encrypt_vault_payload,
+    is_encrypted_vault_payload,
+)
 
 MAX_SANITIZE_CHARS = 1_500_000
+VALID_IDLE_WIPE_MINUTES = (0, 5, 10, 15, 30, 60)
+_VALID_MODIFIERS = frozenset({"alt", "ctrl", "control", "shift", "win", "windows"})
+_VALID_FUNCTION_KEY = re.compile(r"^f([1-9]|1[0-9]|2[0-4])$")
+
+AI_PROMPT_HINTS: Dict[str, str] = {
+    "zh": "# [Sanitizer: 请在回复中原样保留脱敏占位符，切勿修改格式]",
+    "en": "# [Sanitizer: Keep redacted placeholders verbatim in your reply]",
+}
 
 
 class InputTooLargeError(ValueError):
@@ -56,6 +69,8 @@ def get_runtime_dir() -> Path:
 
 
 PROJECT_ROOT = get_runtime_dir()
+
+
 def get_default_config_path() -> Path:
     """Keep packaged-app settings outside executable folders and sync staging."""
     if getattr(sys, "frozen", False) and sys.platform == "win32":
@@ -79,6 +94,11 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
     "theme": "dark",
     "semantic_ip_mode": False,
     "auto_sanitize_clipboard": False,
+    "ai_prompt_hint": False,
+    "custom_word_whole_word": True,
+    "idle_wipe_minutes": 30,
+    "hud_enabled": True,
+    "clipboard_privacy_guard": True,
     "hotkeys": {
         "sanitize": "alt+s",
         "restore": "alt+r",
@@ -238,6 +258,51 @@ class SessionVault:
                 return f"dev_user_{index}"
         return template.format(category=category, index=index)
 
+    def remove_mapping(self, placeholder: str) -> bool:
+        """Remove a single placeholder <-> original mapping from the session vault."""
+        with self._lock:
+            orig = self._placeholder_to_original.pop(placeholder, None)
+            if orig is None:
+                return False
+            self._original_to_placeholder.pop(orig, None)
+            self._original_to_category.pop(orig, None)
+            return True
+
+    def lookup_original(self, placeholder: str) -> Optional[str]:
+        with self._lock:
+            return self._placeholder_to_original.get(placeholder)
+
+    def lookup_category(self, placeholder: str) -> str:
+        with self._lock:
+            orig = self._placeholder_to_original.get(placeholder)
+            if orig is None:
+                return "UNKNOWN"
+            return self._original_to_category.get(orig, "UNKNOWN")
+
+    def merge_from(self, other: "SessionVault") -> int:
+        """Merge mappings from another SessionVault (e.g., isolated sandbox) into this vault."""
+        merged = 0
+        payload = other.export_dict()
+        with self._lock:
+            for orig, ph in payload["original_to_placeholder"].items():
+                cat = payload["original_to_category"].get(orig, "CUSTOM_SECRET")
+                if orig in self._original_to_placeholder:
+                    continue
+                if ph in self._placeholder_to_original:
+                    # Allocate a fresh placeholder if the slot is already occupied in this vault.
+                    self.get_or_create_placeholder(orig, cat)
+                else:
+                    self._original_to_placeholder[orig] = ph
+                    self._placeholder_to_original[ph] = orig
+                    self._original_to_category[orig] = cat
+                    try:
+                        idx = self._loaded_placeholder_index(ph, cat)
+                        self._category_counters[cat] = max(self._category_counters.get(cat, 0), idx)
+                    except ValueError:
+                        pass
+                merged += 1
+        return merged
+
     def clear(self) -> int:
         """Clear all session mappings and return the number of cleared entries."""
         with self._lock:
@@ -268,17 +333,22 @@ class SessionVault:
         items.sort(key=lambda item: len(item[0]), reverse=True)
         return items
 
-    def save_to_file(self, path: Path) -> None:
-        """Export current session mappings atomically to a JSON file with restricted permissions."""
-        target = Path(path)
+    def export_dict(self) -> Dict[str, Any]:
         with self._lock:
-            payload = {
+            return {
                 "original_to_placeholder": dict(self._original_to_placeholder),
                 "placeholder_to_original": dict(self._placeholder_to_original),
                 "original_to_category": dict(self._original_to_category),
                 "category_counters": dict(self._category_counters),
                 "total_intercepted_hits": self._total_intercepted_hits,
             }
+
+    def save_to_file(self, path: Path, passphrase: Optional[str] = None) -> None:
+        """Export current session mappings atomically to JSON (plaintext or AES-256-GCM encrypted)."""
+        target = Path(path)
+        payload = self.export_dict()
+        if passphrase is not None:
+            payload = encrypt_vault_payload(payload, passphrase)
         serialized = json.dumps(payload, indent=2, ensure_ascii=False)
         atomic_write_private(target, serialized)
 
@@ -320,12 +390,16 @@ class SessionVault:
             raise ValueError("Invalid vault counter")
         return value
 
-    def load_from_file(self, path: Path) -> None:
-        """Validate the entire imported state before merging it into the live vault."""
+    def load_from_file(self, path: Path, passphrase: Optional[str] = None) -> None:
+        """Validate the entire imported state (plaintext or encrypted) before merging into the live vault."""
         source = validate_private_path(path)
         if not source.exists():
             return
         raw = json.loads(source.read_text(encoding="utf-8"))
+        if is_encrypted_vault_payload(raw):
+            if passphrase is None:
+                raise ValueError("Encrypted vault requires a passphrase")
+            raw = decrypt_vault_payload(raw, passphrase)
         if not isinstance(raw, dict):
             raise ValueError("Invalid vault format")
         fields = ("original_to_placeholder", "placeholder_to_original", "original_to_category", "category_counters")
@@ -463,10 +537,62 @@ class PrivacySanitizer:
                     self._persisted_config = copy.deepcopy(self._config_data)
             return self._config_data
 
+    @classmethod
+    def validate_config_dict(cls, candidate: Any) -> Dict[str, Any]:
+        """Validate known config keys and types while preserving unknown future keys."""
+        if not isinstance(candidate, dict):
+            raise ValueError("Configuration root must be a JSON object")
+        validated = copy.deepcopy(candidate)
+        if "language" in validated and str(validated["language"]).lower() not in ("zh", "en"):
+            raise ValueError("Invalid language value")
+        if "theme" in validated and str(validated["theme"]).lower() not in ("dark", "light"):
+            raise ValueError("Invalid theme value")
+        for bool_key in (
+            "semantic_ip_mode",
+            "auto_sanitize_clipboard",
+            "ai_prompt_hint",
+            "custom_word_whole_word",
+            "hud_enabled",
+            "clipboard_privacy_guard",
+        ):
+            if bool_key in validated and not isinstance(validated[bool_key], bool):
+                raise ValueError(f"Invalid boolean setting: {bool_key}")
+        if "idle_wipe_minutes" in validated:
+            val = validated["idle_wipe_minutes"]
+            if type(val) is not int or val < 0 or val > 1440:
+                raise ValueError("Invalid idle_wipe_minutes setting")
+        if "hotkeys" in validated:
+            hk = validated["hotkeys"]
+            if not isinstance(hk, dict):
+                raise ValueError("Invalid hotkeys section")
+            san = str(hk.get("sanitize", "alt+s"))
+            res = str(hk.get("restore", "alt+r"))
+            validated["hotkeys"] = cls.normalize_hotkeys(san, res)
+        if "allowlist" in validated:
+            if not isinstance(validated["allowlist"], list) or any(
+                not isinstance(x, str) for x in validated["allowlist"]
+            ):
+                raise ValueError("Invalid allowlist section")
+        if "disabled_rules" in validated:
+            if not isinstance(validated["disabled_rules"], list) or any(
+                not isinstance(x, str) for x in validated["disabled_rules"]
+            ):
+                raise ValueError("Invalid disabled_rules section")
+        if "custom_dictionary" in validated:
+            cd = validated["custom_dictionary"]
+            if not isinstance(cd, dict):
+                raise ValueError("Invalid custom_dictionary section")
+            for cat, words in cd.items():
+                if not isinstance(cat, str) or not isinstance(words, list) or any(
+                    not isinstance(w, str) for w in words
+                ):
+                    raise ValueError("Invalid custom_dictionary entries")
+        return validated
+
     def save_config(self, new_config: Optional[Dict[str, Any]] = None) -> None:
         """Persist current or provided configuration dictionary to `config.json` atomically."""
         with self._config_lock:
-            candidate = self._config_data if new_config is None else new_config
+            candidate = self._config_data if new_config is None else self.validate_config_dict(new_config)
             try:
                 serialized = json.dumps(candidate, indent=2, ensure_ascii=False)
                 atomic_write_private(self.config_path, serialized)
@@ -529,6 +655,66 @@ class PrivacySanitizer:
             self.save_config()
 
     @property
+    def ai_prompt_hint(self) -> bool:
+        self.reload_config()
+        return bool(self._config_data.get("ai_prompt_hint", False))
+
+    def set_ai_prompt_hint(self, enabled: bool) -> None:
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["ai_prompt_hint"] = bool(enabled)
+            self.save_config()
+
+    @property
+    def custom_word_whole_word(self) -> bool:
+        self.reload_config()
+        return bool(self._config_data.get("custom_word_whole_word", True))
+
+    def set_custom_word_whole_word(self, enabled: bool) -> None:
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["custom_word_whole_word"] = bool(enabled)
+            self.save_config()
+
+    @property
+    def idle_wipe_minutes(self) -> int:
+        self.reload_config()
+        raw = self._config_data.get("idle_wipe_minutes", 30)
+        if type(raw) is int and 0 <= raw <= 1440:
+            return raw
+        return 30
+
+    def set_idle_wipe_minutes(self, minutes: int) -> None:
+        if type(minutes) is not int or minutes < 0 or minutes > 1440:
+            raise ValueError("Invalid idle wipe timeout")
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["idle_wipe_minutes"] = minutes
+            self.save_config()
+
+    @property
+    def hud_enabled(self) -> bool:
+        self.reload_config()
+        return bool(self._config_data.get("hud_enabled", True))
+
+    def set_hud_enabled(self, enabled: bool) -> None:
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["hud_enabled"] = bool(enabled)
+            self.save_config()
+
+    @property
+    def clipboard_privacy_guard(self) -> bool:
+        self.reload_config()
+        return bool(self._config_data.get("clipboard_privacy_guard", True))
+
+    def set_clipboard_privacy_guard(self, enabled: bool) -> None:
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["clipboard_privacy_guard"] = bool(enabled)
+            self.save_config()
+
+    @property
     def hotkeys(self) -> Dict[str, str]:
         self.reload_config()
         hk = self._config_data.get("hotkeys", {})
@@ -542,18 +728,40 @@ class PrivacySanitizer:
         }
 
     @staticmethod
-    def normalize_hotkeys(sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:
+    def _validate_single_hotkey(chord: str) -> str:
+        cleaned = re.sub(r"\s+", "", str(chord or "").strip().lower())
+        if not cleaned or not re.match(r"^[a-z0-9_+/\-]+$", cleaned):
+            raise ValueError("Invalid hotkey format")
+        parts = cleaned.split("+")
+        if any(not p for p in parts):
+            raise ValueError("Invalid hotkey format")
+        key = parts[-1]
+        mods = parts[:-1]
+        if not mods:
+            # Bare single keys (like 'a', 'space', 'esc') hijack typing across the OS.
+            # Only allow standalone function keys F1-F24 without modifiers.
+            if not _VALID_FUNCTION_KEY.fullmatch(key):
+                raise ValueError("Hotkey requires a modifier key (Ctrl/Alt/Shift/Win) or F1-F24")
+            return key
+        seen_mods = set()
+        for mod in mods:
+            if mod not in _VALID_MODIFIERS:
+                raise ValueError("Unsupported hotkey modifier")
+            canonical = "ctrl" if mod == "control" else ("win" if mod == "windows" else mod)
+            if canonical in seen_mods:
+                raise ValueError("Duplicate hotkey modifier")
+            seen_mods.add(canonical)
+        if key in _VALID_MODIFIERS:
+            raise ValueError("Hotkey must include a non-modifier key")
+        return cleaned
+
+    @classmethod
+    def normalize_hotkeys(cls, sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:
         """Validate a candidate without changing settings or writing to disk."""
-        san_clean = re.sub(r"\s+", "", str(sanitize_hotkey or "").strip().lower())
-        res_clean = re.sub(r"\s+", "", str(restore_hotkey or "").strip().lower())
-        if not san_clean or not res_clean:
-            raise ValueError("Hotkey cannot be empty")
+        san_clean = cls._validate_single_hotkey(sanitize_hotkey)
+        res_clean = cls._validate_single_hotkey(restore_hotkey)
         if san_clean == res_clean:
             raise ValueError("Sanitize and Restore hotkeys must be different")
-        if not re.match(r"^[a-z0-9_+/\-]+$", san_clean) or not re.match(
-            r"^[a-z0-9_+/\-]+$", res_clean
-        ):
-            raise ValueError("Invalid hotkey format")
         return {"sanitize": san_clean, "restore": res_clean}
 
     def set_hotkeys(self, sanitize_hotkey: str, restore_hotkey: str) -> Dict[str, str]:
@@ -681,6 +889,13 @@ class PrivacySanitizer:
             return []
         return [str(r).strip() for r in raw if isinstance(r, str) and r.strip()]
 
+    def active_rule_counts(self) -> Tuple[int, int]:
+        """Return (active_count, total_count) for built-in rules."""
+        disabled = set(self.get_disabled_rules())
+        total = len(self.rules)
+        active = sum(1 for r in self.rules if r.enabled_by_default and r.name not in disabled)
+        return active, total
+
     def set_rule_enabled(self, rule_name: str, enabled: bool) -> None:
         """Enable or disable a built-in rule by `rule_name` and save to `config.json`."""
         cleaned = str(rule_name or "").strip()
@@ -696,6 +911,18 @@ class PrivacySanitizer:
             self._config_data["disabled_rules"] = disabled
             self.save_config()
 
+    def apply_rule_preset(self, preset_name: str) -> Tuple[int, int]:
+        """Apply a built-in rule preset ('dev', 'hr', or 'strict') and persist disabled_rules."""
+        if preset_name not in RULE_PRESETS:
+            raise ValueError(f"Unknown rule preset: {preset_name}")
+        enabled_set = set(RULE_PRESETS[preset_name])
+        disabled = [r.name for r in self.rules if r.name not in enabled_set]
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["disabled_rules"] = disabled
+            self.save_config()
+        return self.active_rule_counts()
+
     def export_config(self, target_path: Path) -> None:
         """Export current `config.json` to `target_path`."""
         self.reload_config()
@@ -703,14 +930,24 @@ class PrivacySanitizer:
             target_path, json.dumps(self._config_data, indent=2, ensure_ascii=False)
         )
 
-    def import_config(self, source_path: Path) -> Dict[str, Any]:
-        """Import and merge/replace configuration from `source_path`."""
-        raw = Path(source_path).read_text(encoding="utf-8")
+    def import_config(self, source_path: Path, *, dictionary_only: bool = False) -> Dict[str, Any]:
+        """Validate and import configuration (or custom dictionary/allowlist only) from `source_path`."""
+        source = validate_private_path(Path(source_path))
+        raw = source.read_text(encoding="utf-8")
         imported = json.loads(raw)
         if not isinstance(imported, dict) or "custom_dictionary" not in imported:
             raise ValueError("Invalid config format: missing 'custom_dictionary'")
+        validated = self.validate_config_dict(imported)
         with self._config_lock:
-            self.save_config(imported)
+            if dictionary_only:
+                self.reload_config()
+                merged = copy.deepcopy(self._config_data)
+                merged["custom_dictionary"] = validated["custom_dictionary"]
+                if "allowlist" in validated:
+                    merged["allowlist"] = validated["allowlist"]
+                self.save_config(merged)
+            else:
+                self.save_config(validated)
             return self._config_data
 
     def _get_sorted_custom_terms(self) -> List[Tuple[str, str]]:
@@ -723,14 +960,32 @@ class PrivacySanitizer:
         terms.sort(key=lambda item: len(item[0]), reverse=True)
         return terms
 
-    def sanitize(self, text: str) -> SanitizeResult:
+    @staticmethod
+    def _compile_custom_term_pattern(term: str, whole_word: bool) -> Pattern[str]:
+        escaped = re.escape(term)
+        if whole_word and term:
+            prefix = r"(?<![A-Za-z0-9_])" if (term[0].isascii() and term[0].isalnum()) else ""
+            suffix = r"(?![A-Za-z0-9_])" if (term[-1].isascii() and term[-1].isalnum()) else ""
+            return re.compile(prefix + escaped + suffix, re.IGNORECASE)
+        return re.compile(escaped, re.IGNORECASE)
+
+    def sanitize(
+        self,
+        text: str,
+        *,
+        vault: Optional[SessionVault] = None,
+        include_ai_hint: Optional[bool] = None,
+    ) -> SanitizeResult:
         """Sanitize text using Layer 1 (Custom Dictionary) followed by Layer 2 (Regex Rules)."""
         if len(text) > MAX_SANITIZE_CHARS:
             raise InputTooLargeError()
         if not text:
             return SanitizeResult(sanitized_text=text, total_count=0, category_counts={})
 
+        active_vault = self.vault if vault is None else vault
         semantic_ip = self.semantic_ip_mode
+        whole_word = self.custom_word_whole_word
+        use_ai_hint = self.ai_prompt_hint if include_ai_hint is None else bool(include_ai_hint)
         allowlist_lower = {w.lower() for w in self.get_allowlist()}
         disabled_set = set(self.get_disabled_rules())
         category_counts: Dict[str, int] = {}
@@ -743,28 +998,53 @@ class PrivacySanitizer:
         while san_prefix in text:
             san_prefix += "\x00"
         sentinel_pattern = re.compile(re.escape(san_prefix) + r"\d+__\x01\x00")
+        cached_starts: List[int] = []
+        cached_ends: List[int] = []
+        spans_dirty = False
 
         def unprotect(value: str) -> str:
+            if not sentinel_to_placeholder or san_prefix not in value:
+                return value
             return sentinel_pattern.sub(
                 lambda match: sentinel_to_placeholder.get(match.group(0), match.group(0)), value
             )
 
         def protected_sub(pattern: re.Pattern, replacer) -> str:
-            # Do not let short dictionary terms or rules rewrite fragments inside a marker.
-            spans = [match.span() for match in sentinel_pattern.finditer(working_text)]
-            starts = [start for start, _ in spans]
-            ends = [end for _, end in spans]
+            nonlocal cached_starts, cached_ends, spans_dirty
+            # Fast path: when no sentinels exist in working_text yet, skip span scanning entirely.
+            if not sentinel_to_placeholder:
+                new_text, count = pattern.subn(replacer, working_text)
+                if count and sentinel_to_placeholder:
+                    spans_dirty = True
+                return new_text
+
+            if spans_dirty:
+                spans = [match.span() for match in sentinel_pattern.finditer(working_text)]
+                cached_starts = [start for start, _ in spans]
+                cached_ends = [end for _, end in spans]
+                spans_dirty = False
+
+            starts = cached_starts
+            ends = cached_ends
+            mutated = False
 
             def guarded(match: re.Match) -> str:
+                nonlocal mutated
                 first = bisect_right(ends, match.start())
                 last = bisect_left(starts, match.end()) - 1
                 if first <= last and (
                     match.start() > starts[first] or match.end() < ends[last]
                 ):
                     return match.group(0)
-                return replacer(match)
+                replaced = replacer(match)
+                if replaced != match.group(0):
+                    mutated = True
+                return replaced
 
-            return pattern.sub(guarded, working_text)
+            new_text = pattern.sub(guarded, working_text)
+            if mutated:
+                spans_dirty = True
+            return new_text
 
         def allocate_sentinel(placeholder: str) -> str:
             nonlocal sentinel_seq
@@ -784,18 +1064,20 @@ class PrivacySanitizer:
         working_text = text
 
         # Protect any already-existing placeholders in the input text (idempotency)
-        for existing_ph, _, _ in self.vault.snapshot_placeholders():
+        for existing_ph, _, _ in active_vault.snapshot_placeholders():
             if existing_ph in working_text:
-                working_text = re.sub(
+                working_text, changed = re.subn(
                     _placeholder_pattern(existing_ph),
                     lambda _match, ph=existing_ph: allocate_sentinel(ph), working_text,
                 )
+                if changed:
+                    spans_dirty = True
 
         # --- Layer 1: Custom High-Risk Dictionary (Sorted Longest to Shortest, Case-Insensitive) ---
         for term, category in self._get_sorted_custom_terms():
             if term.lower() in allowlist_lower:
                 continue
-            pattern = re.compile(re.escape(term), re.IGNORECASE)
+            pattern = self._compile_custom_term_pattern(term, whole_word=whole_word)
             if not pattern.search(working_text):
                 continue
 
@@ -806,7 +1088,7 @@ class PrivacySanitizer:
                 matched_val = unprotect(matched_val)
                 if matched_val.lower() in allowlist_lower:
                     return matched_val
-                ph = self.vault.get_or_create_placeholder(
+                ph = active_vault.get_or_create_placeholder(
                     original=matched_val,
                     category=cat,
                     template="[{category}_{index}]",
@@ -818,9 +1100,30 @@ class PrivacySanitizer:
             working_text = protected_sub(pattern, _dict_replacer)
 
         # --- Layer 2: Built-in High-Strength Regex Engine ---
+        working_lower: Optional[str] = None
+        working_is_ascii: Optional[bool] = None
+        working_has_quote: Optional[bool] = None
+
         for rule in self.rules:
             if not rule.enabled_by_default or rule.name in disabled_set:
                 continue
+            if rule.require_non_ascii:
+                if working_is_ascii is None:
+                    working_is_ascii = working_text.isascii()
+                if working_is_ascii:
+                    continue
+            if rule.require_quote:
+                if working_has_quote is None:
+                    working_has_quote = ('"' in working_text) or ("'" in working_text) or ("`" in working_text)
+                if not working_has_quote:
+                    continue
+            if rule.fast_tokens:
+                if working_lower is None:
+                    working_lower = working_text.lower()
+                if not any(tok in working_lower for tok in rule.fast_tokens):
+                    continue
+
+            before_text = working_text
 
             def _rule_replacer(match: re.Match, current_rule: SanitizeRule = rule) -> str:
                 full_match = match.group(0)
@@ -841,7 +1144,7 @@ class PrivacySanitizer:
                         secret_val
                     ):
                         return full_match
-                    ph = self.vault.get_or_create_placeholder(
+                    ph = active_vault.get_or_create_placeholder(
                         original=secret_val,
                         category=current_rule.category,
                         template=current_rule.placeholder_template,
@@ -861,7 +1164,7 @@ class PrivacySanitizer:
                 ):
                     return full_match
 
-                ph = self.vault.get_or_create_placeholder(
+                ph = active_vault.get_or_create_placeholder(
                     original=original_match,
                     category=current_rule.category,
                     template=current_rule.placeholder_template,
@@ -871,12 +1174,23 @@ class PrivacySanitizer:
                 return allocate_sentinel(ph)
 
             working_text = protected_sub(rule.pattern, _rule_replacer)
+            if working_text is not before_text:
+                working_lower = None
+                working_is_ascii = None
+                working_has_quote = None
 
-        for sentinel, ph in sentinel_to_placeholder.items():
-            working_text = working_text.replace(sentinel, ph)
+        if sentinel_to_placeholder:
+            working_text = sentinel_pattern.sub(
+                lambda match: sentinel_to_placeholder.get(match.group(0), match.group(0)),
+                working_text,
+            )
 
         if total_count > 0:
-            self.vault.record_hits(total_count)
+            active_vault.record_hits(total_count)
+            if use_ai_hint:
+                hint_line = AI_PROMPT_HINTS.get(self.language, AI_PROMPT_HINTS["zh"])
+                if not any(working_text.startswith(h) for h in AI_PROMPT_HINTS.values()):
+                    working_text = f"{hint_line}\n{working_text}"
 
         return SanitizeResult(
             sanitized_text=working_text,
@@ -884,19 +1198,33 @@ class PrivacySanitizer:
             category_counts=category_counts,
         )
 
-    def restore(self, text: str) -> RestoreResult:
+    def restore(self, text: str, *, vault: Optional[SessionVault] = None) -> RestoreResult:
         """Restore all placeholders in `text` back to their original sensitive values (2-stage exact + fuzzy)."""
+        if len(text) > MAX_SANITIZE_CHARS:
+            raise InputTooLargeError()
         if not text:
             return RestoreResult(restored_text=text, restored_count=0)
 
-        placeholders = self.vault.snapshot_placeholders()
-        if not placeholders:
-            return RestoreResult(restored_text=text, restored_count=0)
-
+        active_vault = self.vault if vault is None else vault
         working_text = text
+        # Strip optional AI prompt hint header if present so roundtrips remain lossless.
+        for hint_line in AI_PROMPT_HINTS.values():
+            if working_text.startswith(hint_line + "\r\n"):
+                working_text = working_text[len(hint_line) + 2:]
+                break
+            if working_text.startswith(hint_line + "\n"):
+                working_text = working_text[len(hint_line) + 1:]
+                break
+
+        placeholders = active_vault.snapshot_placeholders()
+        if not placeholders:
+            return RestoreResult(restored_text=working_text, restored_count=0)
+
         restored_count = 0
         sentinel_to_original: Dict[str, str] = {}
         res_prefix = f"\x00\x02__RES_{secrets.token_hex(6)}_"
+        while res_prefix in working_text:
+            res_prefix += "\x00"
 
         # Stage 1: Exact Replacement (Longest placeholder first + sentinel protection)
         for idx, (ph, orig, _) in enumerate(placeholders, start=1):
@@ -942,8 +1270,12 @@ class PrivacySanitizer:
 
             working_text = fuzzy_rx.sub(_fuzzy_sub, working_text)
 
-        for sentinel, orig in sentinel_to_original.items():
-            working_text = working_text.replace(sentinel, orig)
+        if sentinel_to_original:
+            res_pattern = re.compile(re.escape(res_prefix) + r"\d+__\x02\x00")
+            working_text = res_pattern.sub(
+                lambda match: sentinel_to_original.get(match.group(0), match.group(0)),
+                working_text,
+            )
 
         return RestoreResult(
             restored_text=working_text,

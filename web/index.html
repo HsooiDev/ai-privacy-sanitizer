@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Privacy Sanitizer · 100% RAM-Only Web Edition</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none';" />
+  <title>Sanitizer · 100% RAM-Only Web Edition</title>
   <style>
     :root[data-theme="dark"] {
       --bg-main: #0b0f19;
@@ -22,6 +23,11 @@
       --badge-bg: #064e3b;
       --badge-text: #6ee7b7;
       --chip-border: #10b981;
+      --tier-api-bg: #7f1d1d; --tier-api-fg: #fca5a5; --tier-api-bd: #ef4444;
+      --tier-pass-bg: #78350f; --tier-pass-fg: #fcd34d; --tier-pass-bd: #f59e0b;
+      --tier-pii-bg: #581c87; --tier-pii-fg: #d8b4fe; --tier-pii-bd: #a855f7;
+      --tier-net-bg: #1e3a8a; --tier-net-fg: #93c5fd; --tier-net-bd: #3b82f6;
+      --tier-biz-bg: #064e3b; --tier-biz-fg: #6ee7b7; --tier-biz-bd: #10b981;
     }
     :root[data-theme="light"] {
       --bg-main: #f1f5f9;
@@ -40,14 +46,15 @@
       --badge-bg: #d1fae5;
       --badge-text: #065f46;
       --chip-border: #059669;
+      --tier-api-bg: #fee2e2; --tier-api-fg: #991b1b; --tier-api-bd: #ef4444;
+      --tier-pass-bg: #fef3c7; --tier-pass-fg: #92400e; --tier-pass-bd: #f59e0b;
+      --tier-pii-bg: #f3e8ff; --tier-pii-fg: #6b21a8; --tier-pii-bd: #a855f7;
+      --tier-net-bg: #dbeafe; --tier-net-fg: #1e40af; --tier-net-bd: #3b82f6;
+      --tier-biz-bg: #d1fae5; --tier-biz-fg: #065f46; --tier-biz-bd: #10b981;
     }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", Roboto, sans-serif;
       background-color: var(--bg-main);
       color: var(--text-primary);
       line-height: 1.5;
@@ -58,32 +65,37 @@
     header {
       background-color: var(--bg-card);
       border-bottom: 1px solid var(--border);
-      padding: 14px 24px;
+      padding: 12px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 12px;
     }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
+    .idle-progress {
+      height: 3px;
+      width: 100%;
+      background: var(--border);
     }
-    .brand-title {
-      font-size: 20px;
+    .idle-progress-fill {
+      height: 100%;
+      width: 100%;
+      background: var(--accent-green);
+      transition: width 1s linear;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-title { font-size: 19px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .csp-badge {
+      font-size: 11px;
       font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      border: 1px solid var(--chip-border);
     }
-    .brand-sub {
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-    .top-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
+    .brand-sub { font-size: 12px; color: var(--text-secondary); }
+    .top-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     button {
       font-family: inherit;
       font-size: 13px;
@@ -96,88 +108,49 @@
       cursor: pointer;
       transition: opacity 0.15s ease, background-color 0.15s ease;
     }
-    button:hover {
-      opacity: 0.92;
-    }
-    .btn-green {
-      background-color: var(--accent-green);
-      border-color: var(--accent-green);
-      color: #ffffff;
-    }
-    .btn-blue {
-      background-color: var(--accent-blue);
-      border-color: var(--accent-blue);
-      color: #ffffff;
-    }
-    .btn-purple {
-      background-color: var(--accent-purple);
-      border-color: var(--accent-purple);
-      color: #ffffff;
-    }
-    .btn-red {
-      background-color: var(--accent-red);
-      border-color: var(--accent-red);
-      color: #ffffff;
-    }
-    .btn-sm {
-      padding: 4px 10px;
-      font-size: 12px;
-    }
+    button:hover { opacity: 0.9; }
+    .btn-green { background-color: var(--accent-green); border-color: var(--accent-green); color: #ffffff; }
+    .btn-blue { background-color: var(--accent-blue); border-color: var(--accent-blue); color: #ffffff; }
+    .btn-purple { background-color: var(--accent-purple); border-color: var(--accent-purple); color: #ffffff; }
+    .btn-red { background-color: var(--accent-red); border-color: var(--accent-red); color: #ffffff; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
     .container {
-      max-width: 1260px;
+      max-width: 1280px;
       width: 100%;
       margin: 0 auto;
-      padding: 18px 20px;
+      padding: 16px 20px;
       flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
     }
     .security-banner {
       background-color: var(--bg-card);
       border: 1px solid var(--accent-green);
       border-radius: 12px;
-      padding: 12px 18px;
+      padding: 11px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 10px;
     }
-    .security-banner-text {
-      font-size: 13px;
-    }
-    .security-highlight {
-      color: #34d399;
-      font-weight: 700;
-    }
-    :root[data-theme="light"] .security-highlight {
-      color: #059669;
-    }
+    .security-banner-text { font-size: 13px; }
+    .security-highlight { color: #34d399; font-weight: 700; }
+    :root[data-theme="light"] .security-highlight { color: #059669; }
     .toolbar {
       background-color: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 12px 16px;
+      padding: 11px 15px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 10px;
     }
-    .toolbar-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .category-bar {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-      min-height: 26px;
-    }
+    .toolbar-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .category-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 24px; }
     .cat-pill {
       display: inline-block;
       font-size: 12px;
@@ -188,16 +161,13 @@
       color: var(--badge-text);
       border: 1px solid var(--chip-border);
     }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-    @media (max-width: 860px) {
-      .grid-2 {
-        grid-template-columns: 1fr;
-      }
-    }
+    .tier-api { background-color: var(--tier-api-bg); color: var(--tier-api-fg); border-color: var(--tier-api-bd); }
+    .tier-pass { background-color: var(--tier-pass-bg); color: var(--tier-pass-fg); border-color: var(--tier-pass-bd); }
+    .tier-pii { background-color: var(--tier-pii-bg); color: var(--tier-pii-fg); border-color: var(--tier-pii-bd); }
+    .tier-net { background-color: var(--tier-net-bg); color: var(--tier-net-fg); border-color: var(--tier-net-bd); }
+    .tier-biz { background-color: var(--tier-biz-bg); color: var(--tier-biz-fg); border-color: var(--tier-biz-bd); }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
     .card {
       background-color: var(--bg-card);
       border: 1px solid var(--border);
@@ -218,19 +188,20 @@
     }
     textarea {
       width: 100%;
-      min-height: 290px;
+      min-height: 280px;
       background-color: var(--bg-input);
       color: var(--text-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 12px;
-      font-family: Consolas, "Courier New", monospace;
+      font-family: Consolas, Menlo, "Courier New", monospace;
       font-size: 13px;
       resize: vertical;
     }
+    textarea.drag-over { outline: 2px dashed var(--accent-green); outline-offset: -3px; }
     .diff-preview-box {
       width: 100%;
-      min-height: 290px;
+      min-height: 280px;
       max-height: 420px;
       overflow-y: auto;
       background-color: var(--bg-input);
@@ -238,7 +209,7 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 12px;
-      font-family: Consolas, "Courier New", monospace;
+      font-family: Consolas, Menlo, "Courier New", monospace;
       font-size: 13px;
       white-space: pre-wrap;
       word-break: break-word;
@@ -246,41 +217,28 @@
     }
     .diff-chip {
       display: inline-block;
-      padding: 1px 7px;
-      margin: 1px 1px;
+      padding: 1px 6px;
+      margin: 1px;
       border-radius: 6px;
-      background-color: var(--badge-bg);
-      color: var(--badge-text);
       border: 1px solid var(--chip-border);
       font-weight: 700;
-      cursor: help;
-      position: relative;
+      cursor: pointer;
     }
-    .diff-chip:hover {
-      filter: brightness(1.15);
-    }
+    .diff-chip:hover { filter: brightness(1.15); }
     .vault-table-wrap {
       max-height: 240px;
       overflow-y: auto;
       border: 1px solid var(--border);
       border-radius: 8px;
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td {
       padding: 8px 12px;
       border-bottom: 1px solid var(--border);
       text-align: left;
-      font-family: Consolas, monospace;
+      font-family: Consolas, Menlo, monospace;
     }
-    th {
-      background-color: var(--bg-panel);
-      font-family: inherit;
-      color: var(--text-secondary);
-    }
+    th { background-color: var(--bg-panel); font-family: inherit; color: var(--text-secondary); }
     .tag-pill {
       display: inline-block;
       padding: 2px 8px;
@@ -289,18 +247,8 @@
       color: var(--badge-text);
       font-weight: 700;
     }
-    .dict-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    .sub-section-title {
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--text-secondary);
-      margin-top: 4px;
-    }
+    .dict-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .sub-section-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); margin-top: 4px; }
     input[type="text"], select {
       background-color: var(--bg-input);
       color: var(--text-primary);
@@ -326,25 +274,33 @@
   <header>
     <div class="brand">
       <div>
-        <div class="brand-title" id="lblBrandTitle">🛡️ AI Privacy Sanitizer · Web 纯内存安全版</div>
+        <div class="brand-title">
+          <span id="lblBrandTitle">🛡️ Sanitizer · Web 纯内存安全版</span>
+          <span class="csp-badge" id="lblCspBadge">🔒 CSP 零外联已锁定</span>
+        </div>
         <div class="brand-sub" id="lblBrandSub">100% 浏览器内存 (RAM) 运行 · 零网络请求 · 零 localStorage 落盘 · 关页即焚</div>
       </div>
     </div>
     <div class="top-actions">
-      <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+      <label style="font-size:13px; display:flex; align-items:center; gap:5px; cursor:pointer;">
         <input type="checkbox" id="chkSemanticIp" onchange="runSanitizePreview()" />
-        <span id="lblSemanticIp">🌐 语义伪装模式 (IP / Email / Path)</span>
+        <span id="lblSemanticIp">🌐 语义伪装</span>
+      </label>
+      <label style="font-size:13px; display:flex; align-items:center; gap:5px; cursor:pointer;">
+        <input type="checkbox" id="chkAiHint" onchange="runSanitizePreview()" />
+        <span id="lblAiHint">🤖 AI 防变形提示</span>
       </label>
       <button onclick="toggleLanguage()" id="btnLang">🌐 EN / 简中</button>
       <button onclick="toggleTheme()" id="btnTheme">☀️ 浅色模式</button>
     </div>
   </header>
+  <div class="idle-progress"><div class="idle-progress-fill" id="idleProgressFill"></div></div>
 
   <div class="container">
     <div class="security-banner">
       <div class="security-banner-text" id="lblSecBanner">
-        <span class="security-highlight">🔒 零残留承诺 (Zero-Storage Guarantee)：</span>
-        所有密码、账号与映射表 100% 仅保存在当前网页标签页的运行内存变量中，绝不写入 localStorage / Cookie，也不发送任何网络请求。关闭或刷新网页即彻底销毁。
+        <span class="security-highlight">🔒 零残留承诺 (Zero-Storage + CSP)：</span>
+        已启用浏览器级 CSP (`connect-src 'none'`) 禁止一切外发请求；所有密码与映射仅驻留当前标签页 RAM，绝不写入 localStorage / Cookie，关页即焚。
       </div>
       <div style="font-size:12px; color:var(--text-secondary);" id="lblIdleTimer">⏱️ 闲置自动清空保护：10:00</div>
     </div>
@@ -355,9 +311,12 @@
         <button class="btn-blue" onclick="runRestorePreview()" id="btnRestore">🔄 容错逆向还原</button>
         <button onclick="copyOutputText()" id="btnCopyOutput">📑 复制右侧结果</button>
         <button onclick="sanitizeClipboardDirect()" id="btnClipSanitize">📋 读取剪贴板并脱敏</button>
+        <input type="file" id="inpLocalFile" style="display:none;" onchange="handleLocalFileSelected(event)" />
+        <button onclick="triggerLocalFilePicker()" id="btnLocalFile">📄 拖入/选择本地文件</button>
+        <button onclick="downloadOutputFile()" id="btnDownloadOut">💾 导出右侧结果</button>
       </div>
       <div class="toolbar-group">
-        <button onclick="loadSamplePayload()" id="btnLoadSample">📋 载入全场景测试样本</button>
+        <button onclick="loadSamplePayload()" id="btnLoadSample">📋 载入测试样本</button>
         <button onclick="clearSandbox()" id="btnClearBox">🧹 清空文本框</button>
         <button class="btn-red" onclick="wipeAllMemory()" id="btnWipeVault">🔥 清空当前会话</button>
       </div>
@@ -369,9 +328,9 @@
       <div class="card">
         <div class="card-header">
           <span id="lblLeftTitle">📥 原始文本 / AI 回复文本 (Input)</span>
-          <span style="font-size:12px; color:var(--text-secondary);" id="lblInputHint">支持实时输入自动脱敏 & AI 变形占位符容错还原</span>
+          <span style="font-size:12px; color:var(--text-secondary);" id="lblInputHint">支持实时防抖脱敏、拖入 .env/.log 文件与 AI 变形还原</span>
         </div>
-        <textarea id="txtInput" oninput="onInputChanged()" placeholder="在此粘贴代码、日志、.env、密码-123123、账号=asdasd、C:\Users\YourName\..."></textarea>
+        <textarea id="txtInput" oninput="onInputChanged()" placeholder="在此粘贴或拖入代码、日志、.env、密码-123123、Authorization: Basic ..."></textarea>
       </div>
 
       <div class="card">
@@ -390,22 +349,25 @@
     <div class="grid-2">
       <div class="card">
         <div class="card-header">
-          <span id="lblDictTitle">📚 临时自定义词条 & 白名单（仅存当前内存，不落盘）</span>
+          <span id="lblDictTitle">📚 临时自定义词条 &amp; 白名单（仅存当前内存，不落盘）</span>
         </div>
-        <div class="sub-section-title" id="lblCustomWordSub">1. 自定义敏感词条（优先最长匹配）</div>
+        <div class="sub-section-title" id="lblCustomWordSub">1. 自定义敏感词条（优先最长匹配 · 英文默认整词边界）</div>
         <div class="dict-row">
           <select id="selCategory">
-            <option value="COMPANY">COMPANY (公司)</option>
-            <option value="CLIENT">CLIENT (客户)</option>
-            <option value="PROJECT">PROJECT (项目)</option>
-            <option value="CUSTOM_SECRET">CUSTOM_SECRET (机密)</option>
+            <option value="COMPANY" id="optCatCompany">COMPANY (公司)</option>
+            <option value="CLIENT" id="optCatClient">CLIENT (客户)</option>
+            <option value="PROJECT" id="optCatProject">PROJECT (项目)</option>
+            <option value="CUSTOM_SECRET" id="optCatSecret">CUSTOM_SECRET (机密)</option>
           </select>
           <input type="text" id="inpCustomWord" style="flex:1;" onkeydown="if(event.key==='Enter') addCustomWords()" placeholder="输入公司名 Sdn Bhd / 客户名（逗号分隔可批量添加）..." />
           <button class="btn-blue" onclick="addCustomWords()" id="btnAddWord">➕ 添加</button>
         </div>
         <div id="customWordsContainer" style="font-size:12px; color:var(--text-secondary); min-height:26px;"></div>
 
-        <div class="sub-section-title" id="lblAllowlistSub">2. 🛡️ 白名单 Allowlist（匹配白名单的值将跳过脱敏）</div>
+        <div class="sub-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+          <span id="lblAllowlistSub">2. 🛡️ 白名单 Allowlist（点击差异高亮芯片亦可一键加入）</span>
+          <button class="btn-sm" onclick="restoreDefaultAllowlist()" id="btnRestoreAllow">↺ 恢复默认安全白名单</button>
+        </div>
         <div class="dict-row">
           <input type="text" id="inpAllowlist" style="flex:1;" onkeydown="if(event.key==='Enter') addAllowlistWords()" placeholder="输入不需脱敏的白名单值（如 127.0.0.1, safe@example.com，逗号分隔）..." />
           <button class="btn-green" onclick="addAllowlistWords()" id="btnAddAllow">➕ 加入白名单</button>
@@ -442,16 +404,30 @@
   </div>
 
   <footer>
-    <div id="lblStatus">🟢 就绪：100% 纯前端内存模式运行中（已同步 Luhn 校验、路径脱敏与 AI 容错还原引擎）</div>
-    <div>AI Privacy Sanitizer · Hostinger & Local Standalone Web Edition</div>
+    <div id="lblStatus">🟢 就绪：100% 纯前端内存模式运行中（已同步桌面端全套规则、Luhn/MyKad/GB11643 校验与 CSP 零外联保护）</div>
+    <div>Sanitizer · Local Standalone Web Edition</div>
   </footer>
 
   <script>
     // Strict RAM-Only State (Zero localStorage, sessionStorage, IndexedDB, or network requests)
+    var MAX_SANITIZE_CHARS = 1500000;
+    var DEFAULT_SAFE_ALLOWLIST = ["127.0.0.1", "0.0.0.0", "localhost", "example.com"];
+    var AI_PROMPT_HINTS = {
+      zh: "# [Sanitizer: 请在回复中原样保留脱敏占位符，切勿修改格式]",
+      en: "# [Sanitizer: Keep redacted placeholders verbatim in your reply]"
+    };
+    var RISK_TIERS = {
+      PRIVATE_KEY: "api", API_KEY: "api", DB_PASS: "pass",
+      ID_CARD: "pii", BANK_CARD: "pii", PASSPORT: "pii", PHONE: "pii", EMAIL: "pii", USER_ID: "pii",
+      PRIVATE_IP: "net", PUBLIC_IP: "net", IPV6: "net", MAC_ADDR: "net", USER_PATH: "net"
+    };
+
     var currentLang = "zh";
     var currentTheme = "dark";
     var vaultMasked = true;
     var diffPreviewActive = false;
+    var lastFileName = "sanitized.txt";
+    var inputDebounceTimer = null;
     var originalToPlaceholder = Object.create(null);
     var placeholderToOriginal = Object.create(null);
     var originalToCategory = Object.create(null);
@@ -463,7 +439,7 @@
       PROJECT: ["Project-Hyperion-V2", "Project-Hyperion"],
       CUSTOM_SECRET: ["INTERNAL-DEPLOY-PASSPHRASE-9981"]
     };
-    var allowlistItems = ["127.0.0.1", "0.0.0.0", "localhost", "example.com"];
+    var allowlistItems = DEFAULT_SAFE_ALLOWLIST.slice();
     var idleSecondsLeft = 600;
     var sessionGeneration = 0;
 
@@ -480,44 +456,33 @@
     var SAMPLE_PAYLOAD = [
       "# Production Incident Log - Acme Global Technologies Sdn Bhd (Acme Global)",
       "Client: MegaCorp Bank Berhad (Contact: boss@client-a.com, ops@megacorp.com.my)",
-      "StackPath: C:\\Users\\dev_account\\workspace\\hyperion\\config.py | Mac: /Users/workstation_01/app.env",
+      "StackPath: C:\\Users\\dev_account\\workspace\\hyperion\\config.py | HOME=/Users/workstation_01",
       "DATABASE_URL=\"postgres://dbadmin:Sup3rS3cretDB!2026@10.52.18.9:5432/hyperion_prod\"",
-      "ODBC_CONN=\"Server=10.52.18.9;Database=fin_db;Uid=sa_admin;Pwd=OdbcStrongPass#88;\"",
+      "REDIS_URL=\"redis://:R3disP@ssw0rd99@192.168.10.45:6379/0\"",
+      "Authorization: Basic YWRtaW46UzNjcjN0UGFzczg4",
       "密码-123123 | 账号=asdasd | 户口=user_acc_7788 | pass = abcd1234 | password = \"My Secret Root Pass 2026\"",
       "OPENAI_KEY=sk-proj-abc123XYZ789def456GHI012jkl345MNO678",
-      "STRIPE_KEY=sk_live_51Nz0123456789abcdefABCDEF012345",
-      "GROQ_KEY=gsk_0123456789abcdef0123456789abcdef0123456789abcdef",
+      "API_CALL=https://api.svc.io/v1/data?api_key=sk_live_51Nz0123456789abcdefABCDEF012345&page=2",
       "WEBHOOK=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
-      "Upstream Gateway: 8.8.8.8, KL Node: 10.52.18.9, IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
-      "MY Phone: +60 12-345 6789, NRIC: 900307-14-5521, CN ID: 11010519900307231X, Passport: E12345678",
-      "Valid Visa Card: 4111-1111-1111-1111 | Non-Luhn Order No (Ignored): 4111-1111-1111-1112"
+      "Upstream: 8.8.8.8, Subnet: 45.33.32.0/24, KL Node: 10.52.18.9, IPv6: 2001:db8::8a2e:370:7334",
+      "MY Phone: +60 12-345 6789, NRIC: 900307-14-5521, CN ID: 11010519491231002X, Passport: E12345678",
+      "Valid Visa: 4111-1111-1111-1111 | Amex: 3782-822463-10005 | Non-Luhn Ignored: 4111-1111-1111-1112",
+      "Normal Code (Zero False Positive): compass = 1234, bypass = 99, v1.2.3.4"
     ].join("\n");
 
     function isValidLuhn(cardStr) {
       var digits = (cardStr || "").replace(/[ \-]/g, "");
-      if (!/^\d{13,19}$/.test(digits)) {
-        return false;
-      }
+      if (!/^\d{13,19}$/.test(digits)) return false;
       var allSame = true;
       for (var k = 1; k < digits.length; k++) {
-        if (digits.charAt(k) !== digits.charAt(0)) {
-          allSame = false;
-          break;
-        }
+        if (digits.charAt(k) !== digits.charAt(0)) { allSame = false; break; }
       }
-      if (allSame) {
-        return false;
-      }
+      if (allSame) return false;
       var sum = 0;
       var shouldDouble = false;
       for (var i = digits.length - 1; i >= 0; i--) {
         var d = parseInt(digits.charAt(i), 10);
-        if (shouldDouble) {
-          d *= 2;
-          if (d > 9) {
-            d -= 9;
-          }
-        }
+        if (shouldDouble) { d *= 2; if (d > 9) d -= 9; }
         sum += d;
         shouldDouble = !shouldDouble;
       }
@@ -525,36 +490,44 @@
     }
 
     function isValidMyNric(nricStr) {
-      var digits = (nricStr || "").replace(/\-/g, "");
-      if (!/^\d{12}$/.test(digits)) {
-        return false;
-      }
+      var digits = (nricStr || "").replace(/[\s\-]/g, "");
+      if (!/^\d{12}$/.test(digits)) return false;
       var month = parseInt(digits.substring(2, 4), 10);
       var day = parseInt(digits.substring(4, 6), 10);
       var pb = parseInt(digits.substring(6, 8), 10);
       var maxDays = { 1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31 };
-      if (!maxDays[month] || day < 1 || day > maxDays[month]) {
-        return false;
-      }
+      if (!maxDays[month] || day < 1 || day > maxDays[month]) return false;
       return Boolean(VALID_MY_PB_CODES[pb]);
+    }
+
+    function isValidCnId(idStr) {
+      var raw = (idStr || "").trim().toUpperCase();
+      if (!/^[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dX]$/.test(raw)) return false;
+      var year = parseInt(raw.substring(6, 10), 10);
+      var month = parseInt(raw.substring(10, 12), 10);
+      var day = parseInt(raw.substring(12, 14), 10);
+      var isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+      var maxDays = { 1: 31, 2: isLeap ? 29 : 28, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31 };
+      if (!maxDays[month] || day < 1 || day > maxDays[month]) return false;
+      var weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+      var checkMap = "10X98765432";
+      var total = 0;
+      for (var i = 0; i < 17; i++) total += parseInt(raw.charAt(i), 10) * weights[i];
+      return raw.charAt(17) === checkMap.charAt(total % 11);
     }
 
     function isAllowlisted(val) {
       if (!val) return false;
       var lower = val.trim().toLowerCase();
       for (var i = 0; i < allowlistItems.length; i++) {
-        if (allowlistItems[i].toLowerCase() === lower) {
-          return true;
-        }
+        if (allowlistItems[i].toLowerCase() === lower) return true;
       }
       return false;
     }
 
     function repeatBullet(count) {
       var out = "";
-      for (var i = 0; i < count; i++) {
-        out += "•";
-      }
+      for (var i = 0; i < count; i++) out += "•";
       return out;
     }
 
@@ -575,20 +548,29 @@
         .replace(/"/g, "&quot;");
     }
 
+    function updateIdleDisplay() {
+      var mins = Math.floor(idleSecondsLeft / 60);
+      var secs = idleSecondsLeft % 60;
+      var padSecs = secs < 10 ? "0" + secs : "" + secs;
+      var el = document.getElementById("lblIdleTimer");
+      if (el) {
+        el.textContent = (currentLang === "zh" ? "⏱️ 闲置自动清空保护：" : "⏱️ Auto-Wipe Idle Timer: ") + mins + ":" + padSecs;
+      }
+      var fill = document.getElementById("idleProgressFill");
+      if (fill && fill.style) {
+        fill.style.width = Math.max(0, Math.min(100, (idleSecondsLeft / 600) * 100)) + "%";
+      }
+    }
+
     function resetIdleTimer() {
       idleSecondsLeft = 600;
+      updateIdleDisplay();
     }
 
     setInterval(function () {
       if (idleSecondsLeft > 0) {
         idleSecondsLeft -= 1;
-        var mins = Math.floor(idleSecondsLeft / 60);
-        var secs = idleSecondsLeft % 60;
-        var padSecs = secs < 10 ? "0" + secs : "" + secs;
-        var el = document.getElementById("lblIdleTimer");
-        if (el) {
-          el.textContent = (currentLang === "zh" ? "⏱️ 闲置自动清空保护：" : "⏱️ Auto-Wipe Idle Timer: ") + mins + ":" + padSecs;
-        }
+        updateIdleDisplay();
         if (idleSecondsLeft === 0) {
           wipeAllMemory();
         }
@@ -597,6 +579,7 @@
 
     document.addEventListener("mousemove", resetIdleTimer);
     document.addEventListener("keydown", resetIdleTimer);
+    document.addEventListener("touchstart", resetIdleTimer);
 
     window.addEventListener("beforeunload", function () {
       originalToPlaceholder = Object.create(null);
@@ -668,10 +651,20 @@
       return prefix;
     }
 
+    function buildCustomTermRegex(term) {
+      var escaped = escapeRegExp(term);
+      var prefix = /^[A-Za-z0-9]/.test(term) ? "(?<![A-Za-z0-9_])" : "";
+      var suffix = /[A-Za-z0-9]$/.test(term) ? "(?![A-Za-z0-9_])" : "";
+      return new RegExp(prefix + escaped + suffix, "gi");
+    }
+
     function sanitizeText(rawText) {
       lastCategoryCounts = Object.create(null);
       if (!rawText) {
-        return { text: "", count: 0 };
+        return { text: "", count: 0, oversize: false };
+      }
+      if (rawText.length > MAX_SANITIZE_CHARS) {
+        return { text: "", count: 0, oversize: true };
       }
       var working = rawText;
       var sentinelToPh = {};
@@ -738,25 +731,21 @@
         }
       }
 
-      // Layer 1: Custom Dictionary (Longest match first, case-insensitive)
+      // Layer 1: Custom Dictionary (Longest match first, case-insensitive, ASCII whole-word protected)
       var allTerms = [];
       var cats = Object.keys(customDict);
       for (i = 0; i < cats.length; i++) {
         var c = cats[i];
         var list = customDict[c] || [];
         for (var j = 0; j < list.length; j++) {
-          if (list[j]) {
-            allTerms.push({ word: list[j], cat: c });
-          }
+          if (list[j]) allTerms.push({ word: list[j], cat: c });
         }
       }
-      allTerms.sort(function (a, b) {
-        return b.word.length - a.word.length;
-      });
+      allTerms.sort(function (a, b) { return b.word.length - a.word.length; });
 
       for (i = 0; i < allTerms.length; i++) {
         var item = allTerms[i];
-        var rx = new RegExp(escapeRegExp(item.word), "gi");
+        var rx = buildCustomTermRegex(item.word);
         protectedReplace(rx, function (matchVal) {
           if (Object.prototype.hasOwnProperty.call(sentinelToPh, matchVal) || isAllowlisted(matchVal)) {
             return matchVal;
@@ -768,16 +757,14 @@
         });
       }
 
-      // Layer 2: Built-in High-Strength Regex Rules + Validators
+      // Layer 2: Built-in High-Strength Regex Rules (100% Parity with Desktop src/rules.py)
       function replaceFull(regex, category, tpl, validatorFn) {
         protectedReplace(regex, function (matchVal) {
           if (Object.prototype.hasOwnProperty.call(sentinelToPh, matchVal) || isAllowlisted(matchVal)) {
             return matchVal;
           }
           matchVal = unprotect(matchVal);
-          if (validatorFn && !validatorFn(matchVal)) {
-            return matchVal;
-          }
+          if (validatorFn && !validatorFn(matchVal)) return matchVal;
           bumpCat(category);
           var ph = getOrCreatePlaceholder(matchVal, category, tpl);
           return allocSentinel(ph);
@@ -786,93 +773,118 @@
 
       function replacePrefixSecretSuffix(regex, category, tpl, validatorFn) {
         protectedReplace(regex, function (fullMatch, prefix, secret, suffix) {
-          if (!secret || Object.prototype.hasOwnProperty.call(sentinelToPh, secret)) {
-            return fullMatch;
-          }
+          if (!secret || Object.prototype.hasOwnProperty.call(sentinelToPh, secret)) return fullMatch;
           secret = unprotect(secret);
-          if (isAllowlisted(secret) || isAllowlisted(fullMatch)) {
-            return fullMatch;
-          }
-          if (validatorFn && !validatorFn(secret)) {
-            return fullMatch;
-          }
+          if (isAllowlisted(secret) || isAllowlisted(fullMatch)) return fullMatch;
+          if (validatorFn && !validatorFn(secret)) return fullMatch;
           bumpCat(category);
           var ph = getOrCreatePlaceholder(secret, category, tpl);
           return (prefix || "") + allocSentinel(ph) + (suffix || "");
         });
       }
 
-      // 0. PEM Private Keys
-      replaceFull(/-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]+?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g, "PRIVATE_KEY", "<PRIVATE_KEY_{index}>");
+      function replaceQuotedSecret(regex, category, tpl, validatorFn) {
+        protectedReplace(regex, function (fullMatch, prefix, quoteChar, secret, endQuote) {
+          if (!secret || Object.prototype.hasOwnProperty.call(sentinelToPh, secret)) return fullMatch;
+          secret = unprotect(secret);
+          if (isAllowlisted(secret) || isAllowlisted(fullMatch)) return fullMatch;
+          if (validatorFn && !validatorFn(secret)) return fullMatch;
+          bumpCat(category);
+          var ph = getOrCreatePlaceholder(secret, category, tpl);
+          return (prefix || "") + (quoteChar || "") + allocSentinel(ph) + (endQuote || "");
+        });
+      }
 
-      // 1. DB, Basic Auth, ODBC & Webhook URLs
-      replacePrefixSecretSuffix(/(\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis(?:s)?|amqp|mssql):\/\/(?:[^:\/@\s'"`]+:)?)([^@\s'"`]+)(@)/gi, "DB_PASS", "[DB_PASS_{index}]");
-      replacePrefixSecretSuffix(/(\b(?:https?|ftp):\/\/[^:\/@\s'"`]+:)([^@\s'"`]+)(@)/gi, "DB_PASS", "[DB_PASS_{index}]");
+      // 0. PEM / SSH / PGP Private Keys (bounded against unclosed backtracking)
+      replaceFull(/-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----[\s\S]{1,32768}?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----/g, "PRIVATE_KEY", "<PRIVATE_KEY_{index}>");
+
+      // 1. DB, Basic Auth (supports '@' in passwords), curl -u, ODBC & Webhook Token-Only
+      replacePrefixSecretSuffix(/(\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis(?:s)?|amqp|mssql):\/\/(?:[^:\/@\s'"`]*:)?)([^\s'"`\/]+)(@(?=[^\s@\/'"`,;]+))/gi, "DB_PASS", "[DB_PASS_{index}]");
+      replacePrefixSecretSuffix(/(\b(?:https?|ftp):\/\/[^:\/@\s'"`]+:)([^\s'"`\/]+)(@(?=[^\s@\/'"`,;]+))/gi, "DB_PASS", "[DB_PASS_{index}]");
       replacePrefixSecretSuffix(/((?:^|\s)(?:-u|--user)\s+['"`]?[^:\s'"`]+:)([^\s'"`]+)(['"`]?)/gi, "DB_PASS", "[DB_PASS_{index}]");
-      replacePrefixSecretSuffix(/(\b(?:Password|Pwd)\s*=\s*)([^;\r\n'"`]{3,})()/gi, "DB_PASS", "[DB_PASS_{index}]");
-      replaceFull(/https:\/\/(?:hooks\.slack\.com\/services\/[A-Za-z0-9+\/_-]+|(?:discord(?:app)?\.com)\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_\-]+|open\.feishu\.cn\/open-apis\/bot\/v2\/hook\/[A-Za-z0-9\-]+|oapi\.dingtalk\.com\/robot\/send\?access_token=[A-Za-z0-9_\-]+|qyapi\.weixin\.qq\.com\/cgi-bin\/webhook\/send\?key=[A-Za-z0-9_\-]+)/gi, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/((?:discord(?:app)?\.com\/api\/webhooks\/\d+\/|hooks\.slack\.com\/services\/|open\.feishu\.cn\/open-apis\/bot\/v2\/hook\/|oapi\.dingtalk\.com\/robot\/send\?access_token=|qyapi\.weixin\.qq\.com\/cgi-bin\/webhook\/send\?key=))([A-Za-z0-9_\-\/]{16,})()/gi, "API_KEY", "<API_KEY_{index}>");
 
-      // 2. Explicit API Keys & Cloud / AI Tokens (OpenAI, Anthropic, Stripe, Groq, HF, npm, PyPI, Telegram, SendGrid, DO, Linear, Supabase, Postman, Shopify, Azure SAS)
+      // 2. Explicit API Keys, Cloud Tokens, HTTP Basic & Bearer Auth
       replaceFull(/\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b(?:sk|rk)_(?:live|test)_[0-9a-zA-Z]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\bsk-(?:proj-|ant-api\d{2}-|ant-|live-|test-)?[A-Za-z0-9_\-]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b(?:gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_\-]{20,})\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\bsk-(?:proj-|ant-api\d{2}-|ant-|or-v\d+-|live-|test-)?[A-Za-z0-9_\-]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_\-]{20,}|gldt-[A-Za-z0-9_\-]{20,}|glrt-[A-Za-z0-9_\-]{20,})\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_\-]{24,})\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\bAIza[0-9A-Za-z_\-]{35}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\bxox[baprs]-[0-9A-Za-z\-]{10,}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\b\d{8,10}:AA[A-Za-z0-9_\-]{33}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\bSG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\b(?:dop_v1_[a-f0-9]{64}|lin_api_[A-Za-z0-9]{40}|sbp_[a-f0-9]{40}|PMAK-[a-f0-9]{24}-[a-f0-9]{34}|shpat_[a-fA-F0-9]{32})\b/g, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/([?&]sig=)([A-Za-z0-9%+\/=]{24,})()/gi, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\bAIza[0-9A-Za-z_\-]{35}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\bxox[baprs]-[0-9A-Za-z\-]{10,}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/(\bAuthorization\s*:\s*Basic\s+)([A-Za-z0-9+\/=]{8,})()/gi, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/(\bBearer\s+)([A-Za-z0-9_\-\.~+\/]{12,}=*)()/gi, "API_KEY", "<API_KEY_{index}>");
 
-      // 3. System Username in File Paths (Windows C:\Users\<user>\, macOS /Users/<user>/, Linux /home/<user>/)
-      replacePrefixSecretSuffix(/((?:[A-Za-z]:\\Users\\|\/Users\/|\/home\/))(?!(?:Public|Default|Default User|All Users|Shared|root|ubuntu|admin|ec2-user|vagrant|docker)\b)([A-Za-z0-9._\-]{2,32})(\\|\/)/g, "USER_PATH", "[USER_PATH_{index}]");
-
-      // 4. Emails, Network (IPv4 / IPv6 / MAC), Passports, IDs & Phones
+      // 3. Emails & Network (MAC, Full & Compressed IPv6, Strict 0-255 Private & Public IPv4 incl. .0)
       replaceFull(/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g, "EMAIL", "[EMAIL_{index}]");
       replaceFull(/\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b/g, "MAC_ADDR", "[MAC_{index}]");
-      replaceFull(/\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g, "IPV6", "[IPV6_{index}]");
-      replaceFull(/\b(?:10\.(?:\d{1,3}\.){2}\d{1,3}|192\.168\.(?:\d{1,3}\.)\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.(?:\d{1,3}\.)\d{1,3})\b/g, "PRIVATE_IP", "[PRIVATE_IP_{index}]");
-      replaceFull(/\b(?!10\.)(?!127\.)(?!192\.168\.)(?!192\.0\.2\.)(?!203\.0\.113\.)(?:25[0-4]|2[0-4]\d|1\d\d|[1-9]\d?)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/g, "PUBLIC_IP", "[PUBLIC_IP_{index}]");
-      replaceFull(/\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b/g, "ID_CARD", "[ID_CARD_{index}]");
-      replaceFull(/\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-\d{2}-\d{4}\b/g, "ID_CARD", "[ID_CARD_{index}]", isValidMyNric);
-      replacePrefixSecretSuffix(/(\b(?:nric|mykad|ic|ic_no|no_kp)\b['"`]?\s*[:=\-]?\s*['"`]?)(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{6})(['"`]?)/gi, "ID_CARD", "[ID_CARD_{index}]", isValidMyNric);
-      replaceFull(/\b(?:[EGDSP]\d{8}|[AHK]\d{8})\b/g, "PASSPORT", "[PASSPORT_{index}]");
-      replaceFull(/(?:\+60[\s\-]?|0060[\s\-]?|0)1(?:1[\s\-]?\d{4}[\s\-]?\d{4}|[02-9][\s\-]?\d{3}[\s\-]?\d{4})\b/g, "PHONE", "[PHONE_{index}]");
-      replaceFull(/(?:\+?86[\-\s]?)?1[3-9]\d{9}\b/g, "PHONE", "[PHONE_{index}]");
-      replaceFull(/\b(?:\d{4}[ \-]?){3}\d{4}\b/g, "BANK_CARD", "[BANK_CARD_{index}]", isValidLuhn);
+      replaceFull(/(?<![0-9A-Fa-f:])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|fe80:(?::[0-9A-Fa-f]{1,4}){0,4}%[0-9a-zA-Z]{1,}|::(?:ffff(?::0{1,4})?:)?(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,5}|(?:[0-9A-Fa-f]{1,4}:){1,7}:|::(?:[0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4})(?![0-9A-Fa-f:])/g, "IPV6", "[IPV6_{index}]");
+      replaceFull(/(?<![\d.])(?:10\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|172\.(?:1[6-9]|2\d|3[01])\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|192\.168\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))(?![\d.])/g, "PRIVATE_IP", "[PRIVATE_IP_{index}]");
+      replaceFull(/(?<![\d.vV])(?!0\.)(?!10\.)(?!127\.)(?!192\.168\.)(?!172\.(?:1[6-9]|2\d|3[01])\.)(?!192\.0\.2\.)(?!198\.51\.100\.)(?!203\.0\.113\.)(?:25[0-4]|2[0-4]\d|1\d\d|[1-9]\d?)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![\d.])/g, "PUBLIC_IP", "[PUBLIC_IP_{index}]");
 
-      // 5. Chinese Key-Value Assignments (密码-123123, 账号=asdasd, 户口=..., etc.)
-      replacePrefixSecretSuffix(/((?:数据库密码|登录密码|管理员密码|初始密码|支付密码|密码|口令|安全码|验证码|PIN码)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([^\s#;,，。！!？?)'"`\]\}\r\n]{3,})(['"`]?)/gi, "DB_PASS", "[DB_PASS_{index}]");
-      replacePrefixSecretSuffix(/((?:访问密钥|私有密钥|接口密钥|密钥|秘钥|私钥|令牌)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([^\s#;,，。！!？?)'"`\]\}\r\n]{4,})(['"`]?)/gi, "API_KEY", "<API_KEY_{index}>");
-      replacePrefixSecretSuffix(/((?:管理员账号|登录账号|测试账号|银行账号|银行户口|户口号码|客户账号|账号|帐号|户口|账户|帐户|用户名|登录名|工号|微信号)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([^\s#;,，。！!？?)'"`\]\}\r\n]{2,})(['"`]?)/gi, "USER_ID", "[USER_ID_{index}]");
+      // 4. OS Path Usernames (supports trailing-slash-free & Unicode usernames) & PII
+      replacePrefixSecretSuffix(/((?:[A-Za-z]:[\\\/]+Users[\\\/]+|(?<![A-Za-z0-9_])\/Users\/|(?<![A-Za-z0-9_])\/home\/))(?!(?:Public|Default(?:\s+User)?|All\s+Users|Shared|root|ubuntu|admin|ec2-user|vagrant|docker|nobody|www-data|postgres|git|runner)(?:[\\\/\s'"`,;:\)\]\}]|$))([^\s\\\/:'"`<>|*?\[\]{}(),;]{2,64})()(?=[\\\/\s'"`,;:\)\]\}]|$)/gi, "USER_PATH", "[USER_PATH_{index}]");
+      replaceFull(/\b\d{6}-\d{2}-\d{4}\b/g, "ID_CARD", "[ID_CARD_{index}]", isValidMyNric);
+      replaceFull(/\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b/g, "ID_CARD", "[ID_CARD_{index}]", isValidCnId);
+      replaceFull(/\b(?:(?:4\d{3}|5[1-5]\d{2}|222[1-9]|22[3-9]\d|2[3-6]\d{2}|27[01]\d|2720)(?:[ -]?\d{4}){3}|62\d{2}(?:[ -]?\d{4}){3}(?:[ -]?\d{1,3})?|3[47]\d{2}[ -]?\d{6}[ -]?\d{5})\b/g, "BANK_CARD", "[BANK_CARD_{index}]", isValidLuhn);
+      replaceFull(/\b(?:[A-HK-NP-Z]\d{8}|[EGDSP]\d{8})\b/g, "PASSPORT", "[PASSPORT_{index}]");
+      replaceFull(/(?<!\d)(?:(?:(?:\+|00)60[\s\-]?|0)1(?:1[\s\-]?\d{4}[\s\-]?\d{4}|[02-9][\s\-]?\d{3}[\s\-]?\d{4})|(?:\+|00)60[\s\-]?[3-9][\s\-]?\d{3,4}[\s\-]?\d{4}|\+(?:65|1|44|61|81|82|852|853|886)[\s\-]?\d{3,4}[\s\-]?\d{4,6}|(?:(?:\+|00)86[\s\-]?)?1[3-9]\d[\s\-]?\d{4}[\s\-]?\d{4})(?!\d)/g, "PHONE", "[PHONE_{index}]");
 
-      // 6. English Quoted & Shorthand Key-Value Assignments (pass = abcd, id = abc1234, password = "my secret")
-      replacePrefixSecretSuffix(/(\b(?:[a-z0-9_]*?(?:password|passwd|passphrase|pwd|pass|pw|pin|otp|cvv))\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`])([^'"`\r\n]{3,})(['"`])/gi, "DB_PASS", "[DB_PASS_{index}]");
-      replacePrefixSecretSuffix(/(\b(?:[a-z0-9_]*?(?:password|passwd|passphrase|pwd|pass|pw|pin|otp|cvv))\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?!(?:true|false|null|none)\b)([^\s#;,)'"`\]\}\r\n]{3,})(['"`]?)/gi, "DB_PASS", "[DB_PASS_{index}]");
-      replacePrefixSecretSuffix(/(\b(?:[a-z0-9_]*?(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|token|secret|apikey|cookie|jwt)|ak|sk|pk|tk)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)([^\s#;,)'"`\]\}\r\n]{4,})(['"`]?)/gi, "API_KEY", "<API_KEY_{index}>");
-      replacePrefixSecretSuffix(/(\b(?:id|uid|uuid|sid|usr|user|uname|username|login|acct|account|user_id|userid|client_id|app_id|account_id)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?!(?:true|false|null|none)\b)([^\s#;,)'"`\]\}\r\n]{2,})(['"`]?)/gi, "USER_ID", "[USER_ID_{index}]");
+      // 5. Chinese Key-Value Assignments (Quoted + Unquoted)
+      replaceQuotedSecret(/((?:数据库密码|登录密码|管理员密码|管理密码|初始密码|默认密码|支付密码|交易密码|无线密码|新密码|旧密码|原密码|密码|口令|安全码|验证码|动态码|校验码|PIN码)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+))(['"`])([^'"`\r\n]{3,})(\2)/gi, "DB_PASS", "[DB_PASS_{index}]");
+      replacePrefixSecretSuffix(/((?:数据库密码|登录密码|管理员密码|管理密码|初始密码|默认密码|支付密码|交易密码|无线密码|新密码|旧密码|原密码|密码|口令|安全码|验证码|动态码|校验码|PIN码)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([^\s#;,&，。！!？?)'"`\]\}\r\n]{3,})(['"`]?)/gi, "DB_PASS", "[DB_PASS_{index}]");
+      replaceQuotedSecret(/((?:访问密钥|私有密钥|接口密钥|应用密钥|签名密钥|密钥|秘钥|私钥|令牌)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+))(['"`])([^'"`\r\n]{4,})(\2)/gi, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/((?:访问密钥|私有密钥|接口密钥|应用密钥|签名密钥|密钥|秘钥|私钥|令牌)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([^\s#;,&，。！!？?)'"`\]\}\r\n]{4,})(['"`]?)/gi, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/((?:身份证号码|身份证号|身份证|证件号码|证件号|大马卡号|大马卡|护照号码|护照号|税号|社保号)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([A-Za-z0-9\-]{6,20})(['"`]?)/gi, "ID_CARD", "[ID_CARD_{index}]");
+      replacePrefixSecretSuffix(/((?:手机号码|手机号|联系电话|电话号码|手提电话|手提号码|电话|手提|座机)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)(\+?[0-9][0-9\-]{6,15})(['"`]?)/gi, "PHONE", "[PHONE_{index}]");
+      replacePrefixSecretSuffix(/((?:银行卡号|银行卡|信用卡号|储蓄卡号|卡号)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([0-9][0-9 \-]{10,22}[0-9])(['"`]?)/gi, "BANK_CARD", "[BANK_CARD_{index}]");
+      replaceQuotedSecret(/((?:管理员账号|管理员帐号|登录账号|登录帐号|测试账号|测试帐号|银行账号|银行帐号|银行户口|银行账户|银行帐户|户口号码|户口号|客户账号|商户号|客户号|员工号|会员号|学生号|账号|帐号|户口|账户|帐户|用户名|登录名|户名|工号|学号|微信号)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+))(['"`])([^'"`\r\n]{2,})(\2)/gi, "USER_ID", "[USER_ID_{index}]");
+      replacePrefixSecretSuffix(/((?:管理员账号|管理员帐号|登录账号|登录帐号|测试账号|测试帐号|银行账号|银行帐号|银行户口|银行账户|银行帐户|户口号码|户口号|客户账号|商户号|客户号|员工号|会员号|学生号|账号|帐号|户口|账户|帐户|用户名|登录名|户名|工号|学号|微信号)(?:[ \t]*[:=：\-—~][ \t]*|[ \t]*(?:是|为)[ \t]*|[ \t]+)['"`]?)([^\s#;,&，。！!？?)'"`\]\}\r\n]{2,})(['"`]?)/gi, "USER_ID", "[USER_ID_{index}]");
+
+      // 6. English Prefix-Guarded Key-Value Assignments (Zero compass=/bypass= false positives, '&' preserved)
+      replaceQuotedSecret(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:password|passwd|passphrase|pwd|pass|pw|pin|otp|cvv|cvc)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d)))(['"`])([^'"`\r\n]{3,})(\2)/gi, "DB_PASS", "[DB_PASS_{index}]");
+      replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:password|passwd|passphrase|pwd|pass|pw|pin|otp|cvv|cvc)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined|nan|yes|no|pass)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{3,})(['"`]?)/gi, "DB_PASS", "[DB_PASS_{index}]");
+      replaceQuotedSecret(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|access[_-]?key|session[_-]?id|token|secret|apikey|cookie|jwt)|ak|sk|pk|tk)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d)))(['"`])([^'"`\r\n]{4,})(\2)/gi, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|access[_-]?key|session[_-]?id|token|secret|apikey|cookie|jwt)|ak|sk|pk|tk)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{4,})(['"`]?)/gi, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/(['"`]?\b(?:ic|nric|mykad|id_no|ic_no|no_kp|ssn|tin|tax_id|ssm|ssm_no)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)([A-Za-z0-9\-]{6,20})(['"`]?)/gi, "ID_CARD", "[ID_CARD_{index}]");
+      replacePrefixSecretSuffix(/(['"`]?\b(?:hp|tel|mobile|phone|handphone|whatsapp)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(\+?[0-9][0-9\-]{6,15})(['"`]?)/gi, "PHONE", "[PHONE_{index}]");
+      replaceQuotedSecret(/((?:^|(?<=[\s'"`(\[{,;\-\.?&]))(?:id|uid|uuid|sid|usr|user|uname|username|login|acct|account|user[ _\-]?id|client[ _\-]?id|app[ _\-]?id|account[ _\-]?id)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d)))(['"`])([^'"`\r\n]{2,})(\2)/gi, "USER_ID", "[USER_ID_{index}]");
+      replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;\-\.?&]))(?:id|uid|uuid|sid|usr|user|uname|username|login|acct|account|user[ _\-]?id|client[ _\-]?id|app[ _\-]?id|account[ _\-]?id)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{2,})(['"`]?)/gi, "USER_ID", "[USER_ID_{index}]");
 
       var sKeys = Object.keys(sentinelToPh);
       for (i = 0; i < sKeys.length; i++) {
         working = working.split(sKeys[i]).join(sentinelToPh[sKeys[i]]);
       }
 
-      return { text: working, count: totalHits };
+      var aiHintEl = document.getElementById("chkAiHint");
+      if (totalHits > 0 && aiHintEl && aiHintEl.checked) {
+        var hintLine = AI_PROMPT_HINTS[currentLang] || AI_PROMPT_HINTS.zh;
+        if (working.indexOf(AI_PROMPT_HINTS.zh) !== 0 && working.indexOf(AI_PROMPT_HINTS.en) !== 0) {
+          working = hintLine + "\n" + working;
+        }
+      }
+
+      return { text: working, count: totalHits, oversize: false };
     }
 
     function restoreText(sanitizedInput) {
-      if (!sanitizedInput) {
-        return { text: "", count: 0 };
-      }
+      if (!sanitizedInput) return { text: "", count: 0, oversize: false };
+      if (sanitizedInput.length > MAX_SANITIZE_CHARS) return { text: "", count: 0, oversize: true };
       var working = sanitizedInput;
-      var phList = Object.keys(placeholderToOriginal).sort(function (a, b) {
-        return b.length - a.length;
-      });
+      var hintKeys = ["zh", "en"];
+      for (var h = 0; h < hintKeys.length; h++) {
+        var hl = AI_PROMPT_HINTS[hintKeys[h]];
+        if (working.indexOf(hl + "\r\n") === 0) { working = working.slice(hl.length + 2); break; }
+        if (working.indexOf(hl + "\n") === 0) { working = working.slice(hl.length + 1); break; }
+      }
+      var phList = Object.keys(placeholderToOriginal).sort(function (a, b) { return b.length - a.length; });
       var restoredCount = 0;
-      var restorePrefix = makeSentinelPrefix(sanitizedInput, "\x02__WEB_RES");
+      var restorePrefix = makeSentinelPrefix(working, "\x02__WEB_RES");
       var sentinelToOrig = {};
       var i;
 
@@ -887,7 +899,7 @@
         });
       }
 
-      // Stage 2: Fuzzy & Case-Insensitive Restore for AI-mutated placeholders ([API_KEY_1], `API_KEY_1`, <api_key_1>, &lt;API_KEY_1&gt;, {API_KEY_1})
+      // Stage 2: Fuzzy & Case-Insensitive Restore for AI-mutated bracketed placeholders
       for (i = 0; i < phList.length; i++) {
         var phKey = phList[i];
         var coreMatch = /^[\[<]([A-Z0-9_]+_\d+)[\]>]$/.exec(phKey);
@@ -909,7 +921,7 @@
       for (var j = 0; j < sKeys.length; j++) {
         working = working.split(sKeys[j]).join(sentinelToOrig[sKeys[j]]);
       }
-      return { text: working, count: restoredCount };
+      return { text: working, count: restoredCount, oversize: false };
     }
 
     function renderCategorySummaryBar() {
@@ -922,7 +934,8 @@
       var html = "";
       for (var i = 0; i < cats.length; i++) {
         var c = cats[i];
-        html += '<span class="cat-pill">' + escapeHtml(c) + ": " + lastCategoryCounts[c] + "</span>";
+        var tier = RISK_TIERS[c] || "biz";
+        html += '<span class="cat-pill tier-' + tier + '">' + escapeHtml(c) + ": " + lastCategoryCounts[c] + "</span>";
       }
       bar.innerHTML = html;
     }
@@ -933,27 +946,26 @@
         box.innerHTML = '<span style="color:var(--text-secondary);">' + (currentLang === "zh" ? "（暂无内容）" : "(Empty)") + "</span>";
         return;
       }
-      var safeHtml = escapeHtml(outputText);
-      var phList = Object.keys(placeholderToOriginal).sort(function (a, b) {
-        return b.length - a.length;
-      });
+      var phList = Object.keys(placeholderToOriginal).sort(function (a, b) { return b.length - a.length; });
       var chipSentinels = {};
-      var chipPrefix = makeSentinelPrefix(safeHtml, "\x03__CHIP");
+      var chipPrefix = makeSentinelPrefix(outputText, "\x03__CHIP");
+      var working = outputText;
       for (var i = 0; i < phList.length; i++) {
         var ph = phList[i];
-        var escapedPh = escapeHtml(ph);
-        if (safeHtml.indexOf(escapedPh) !== -1) {
+        if (working.indexOf(ph) !== -1) {
           var origVal = placeholderToOriginal[ph];
           var cat = originalToCategory[origVal] || "SECRET";
+          var tier = RISK_TIERS[cat] || "biz";
           var tooltip = "[" + cat + "] Original: " + (vaultMasked ? "••••••" : origVal);
           var chipSentinel = chipPrefix + i + "__\x03\x00";
-          chipSentinels[chipSentinel] = '<span class="diff-chip" title="' + escapeHtml(tooltip) + '">' + escapedPh + "</span>";
-          safeHtml = safeHtml.split(escapedPh).join(chipSentinel);
+          chipSentinels[chipSentinel] = '<span class="diff-chip tier-' + tier + '" data-ph="' + escapeHtml(ph) + '" title="' + escapeHtml(tooltip) + '">' + escapeHtml(ph) + "</span>";
+          working = replaceKnownPlaceholder(working, ph, function () { return chipSentinel; });
         }
       }
+      var safeHtml = escapeHtml(working);
       var cKeys = Object.keys(chipSentinels);
       for (var j = 0; j < cKeys.length; j++) {
-        safeHtml = safeHtml.split(cKeys[j]).join(chipSentinels[cKeys[j]]);
+        safeHtml = safeHtml.split(escapeHtml(cKeys[j])).join(chipSentinels[cKeys[j]]);
       }
       box.innerHTML = safeHtml;
     }
@@ -967,7 +979,7 @@
       if (diffPreviewActive) {
         txtOut.style.display = "none";
         diffBox.style.display = "block";
-        btn.textContent = isZh ? "🔍 差异高亮预览: 开 (遵循原值遮罩)" : "🔍 Diff Highlight: ON (Hover)";
+        btn.textContent = isZh ? "🔍 差异高亮预览: 开 (点击标签可放行)" : "🔍 Diff Highlight: ON (Click to Allowlist)";
         renderDiffPreview(txtOut.value);
       } else {
         txtOut.style.display = "block";
@@ -989,12 +1001,30 @@
 
     function onInputChanged() {
       resetIdleTimer();
-      runSanitizePreview();
+      if (typeof setTimeout === "function") {
+        if (inputDebounceTimer !== null) clearTimeout(inputDebounceTimer);
+        inputDebounceTimer = setTimeout(function () {
+          inputDebounceTimer = null;
+          runSanitizePreview();
+        }, 250);
+      } else {
+        runSanitizePreview();
+      }
     }
 
     function runSanitizePreview() {
       var raw = document.getElementById("txtInput").value;
       var res = sanitizeText(raw);
+      if (res.oversize) {
+        document.getElementById("txtOutput").value = "";
+        document.getElementById("lblStatsBadge").textContent = currentLang === "zh" ? "⚠️ 超过长度上限" : "⚠️ Input Too Large";
+        document.getElementById("lblStatus").textContent = currentLang === "zh"
+          ? "⚠️ 超过 1,500,000 字符上限，未处理；原文仍未脱敏，请勿直接粘贴给外部 AI"
+          : "⚠️ Over 1,500,000 characters; not processed. Input remains UNSANITIZED.";
+        renderCategorySummaryBar();
+        renderDiffPreview("");
+        return;
+      }
       document.getElementById("txtOutput").value = res.text;
       document.getElementById("lblStatsBadge").textContent = (currentLang === "zh" ? "✅ 已保护: " : "✅ Masked: ") + res.count;
       renderCategorySummaryBar();
@@ -1006,12 +1036,24 @@
       resetIdleTimer();
       var src = document.getElementById("txtOutput").value || document.getElementById("txtInput").value;
       var res = restoreText(src);
+      if (res.oversize) {
+        document.getElementById("lblStatus").textContent = currentLang === "zh"
+          ? "⚠️ 超过 1,500,000 字符上限，已拒绝还原"
+          : "⚠️ Over 1,500,000 characters; restore rejected.";
+        return;
+      }
       document.getElementById("txtOutput").value = res.text;
       document.getElementById("lblStatsBadge").textContent = (currentLang === "zh" ? "🔄 已还原: " : "🔄 Restored: ") + res.count;
       renderDiffPreview(res.text);
-      document.getElementById("lblStatus").textContent = currentLang === "zh"
-        ? "⚠️ 已还原真实数据；仅在本地使用，分享前请检查"
-        : "⚠️ Original values restored; use locally and review before sharing";
+      if (res.count > 0) {
+        document.getElementById("lblStatus").textContent = currentLang === "zh"
+          ? "⚠️ 已还原真实数据；仅在本地使用，分享前请检查"
+          : "⚠️ Original values restored; use locally and review before sharing";
+      } else {
+        document.getElementById("lblStatus").textContent = currentLang === "zh"
+          ? "ℹ️ 未发现可还原的占位符"
+          : "ℹ️ No placeholders found to restore";
+      }
     }
 
     function copyOutputText() {
@@ -1068,6 +1110,56 @@
       });
     }
 
+    function triggerLocalFilePicker() {
+      var input = document.getElementById("inpLocalFile");
+      if (input && input.click) input.click();
+    }
+
+    function readLocalFileObject(file) {
+      if (!file || typeof FileReader === "undefined") return;
+      if (file.size > MAX_SANITIZE_CHARS * 4) {
+        document.getElementById("lblStatus").textContent = currentLang === "zh"
+          ? "⚠️ 文件体积超过安全限制，未读取"
+          : "⚠️ File exceeds safe size limit; not loaded.";
+        return;
+      }
+      lastFileName = file.name || "sanitized.txt";
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        document.getElementById("txtInput").value = String(ev.target.result || "");
+        resetIdleTimer();
+        runSanitizePreview();
+        document.getElementById("lblStatus").textContent = currentLang === "zh"
+          ? "📄 已在浏览器内存中完成本地文件脱敏"
+          : "📄 Local file sanitized strictly in browser RAM";
+      };
+      reader.readAsText(file, "UTF-8");
+    }
+
+    function handleLocalFileSelected(event) {
+      var files = event && event.target && event.target.files;
+      if (files && files[0]) readLocalFileObject(files[0]);
+      if (event && event.target) event.target.value = "";
+    }
+
+    function downloadOutputFile() {
+      var content = document.getElementById("txtOutput").value;
+      if (!content || typeof Blob === "undefined" || typeof URL === "undefined") return;
+      var dot = lastFileName.lastIndexOf(".");
+      var outName = dot > 0
+        ? lastFileName.slice(0, dot) + ".sanitized" + lastFileName.slice(dot)
+        : lastFileName + ".sanitized.txt";
+      var blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = outName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
     function loadSamplePayload() {
       document.getElementById("txtInput").value = SAMPLE_PAYLOAD;
       runSanitizePreview();
@@ -1084,6 +1176,10 @@
 
     function wipeAllMemory() {
       sessionGeneration += 1;
+      if (inputDebounceTimer !== null && typeof clearTimeout === "function") {
+        clearTimeout(inputDebounceTimer);
+        inputDebounceTimer = null;
+      }
       originalToPlaceholder = Object.create(null);
       placeholderToOriginal = Object.create(null);
       originalToCategory = Object.create(null);
@@ -1099,7 +1195,21 @@
       renderAllowlist();
       clearSandbox();
       renderVaultTable();
-      document.getElementById("lblStatus").textContent = currentLang === "zh" ? "🔥 已清空会话映射、词条与输入，并恢复原值遮罩" : "🔥 Cleared session mappings, words and inputs; originals masked";
+      document.getElementById("lblStatus").textContent = currentLang === "zh"
+        ? "🔥 已清空会话映射、词条与输入，并恢复原值遮罩"
+        : "🔥 Cleared session mappings, words and inputs; originals masked";
+    }
+
+    function restoreDefaultAllowlist() {
+      for (var i = 0; i < DEFAULT_SAFE_ALLOWLIST.length; i++) {
+        var w = DEFAULT_SAFE_ALLOWLIST[i];
+        if (!isAllowlisted(w)) allowlistItems.push(w);
+      }
+      renderAllowlist();
+      runSanitizePreview();
+      document.getElementById("lblStatus").textContent = currentLang === "zh"
+        ? "🛡️ 已恢复默认安全白名单 (127.0.0.1 / localhost)"
+        : "🛡️ Restored default safe allowlist (127.0.0.1 / localhost)";
     }
 
     function addCustomWords() {
@@ -1109,9 +1219,7 @@
       var parts = raw.split(/[,，;；\r\n]+/);
       for (var i = 0; i < parts.length; i++) {
         var w = parts[i].trim();
-        if (w && customDict[cat].indexOf(w) === -1) {
-          customDict[cat].push(w);
-        }
+        if (w && customDict[cat].indexOf(w) === -1) customDict[cat].push(w);
       }
       document.getElementById("inpCustomWord").value = "";
       renderCustomWords();
@@ -1161,9 +1269,7 @@
       var parts = raw.split(/[,，;；\r\n]+/);
       for (var i = 0; i < parts.length; i++) {
         var w = parts[i].trim();
-        if (w && !isAllowlisted(w)) {
-          allowlistItems.push(w);
-        }
+        if (w && !isAllowlisted(w)) allowlistItems.push(w);
       }
       document.getElementById("inpAllowlist").value = "";
       renderAllowlist();
@@ -1172,10 +1278,7 @@
 
     function removeAllowlistWord(word) {
       for (var i = 0; i < allowlistItems.length; i++) {
-        if (allowlistItems[i] === word) {
-          allowlistItems.splice(i, 1);
-          break;
-        }
+        if (allowlistItems[i] === word) { allowlistItems.splice(i, 1); break; }
       }
       renderAllowlist();
       runSanitizePreview();
@@ -1196,7 +1299,7 @@
       var phs = Object.keys(placeholderToOriginal);
       document.getElementById("lblVaultCount").textContent = phs.length + (currentLang === "zh" ? " 组映射" : " pairs");
       if (phs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-secondary);">' + (currentLang === "zh" ? "当前内存保险箱为空" : "RAM Session Vault is empty") + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-secondary);">' + (currentLang === "zh" ? "当前内存保险箱为空" : "RAM Session Vault is empty") + "</td></tr>";
         return;
       }
       var rowsHtml = "";
@@ -1204,8 +1307,9 @@
         var ph = phs[i];
         var orig = placeholderToOriginal[ph];
         var cat = originalToCategory[orig] || "SECRET";
+        var tier = RISK_TIERS[cat] || "biz";
         var displayOrig = vaultMasked ? maskSecretPreview(orig) : orig;
-        rowsHtml += '<tr><td><span class="tag-pill">' + escapeHtml(ph) + "</span></td><td>" + escapeHtml(cat) + "</td><td>" + escapeHtml(displayOrig) + "</td></tr>";
+        rowsHtml += '<tr><td><span class="tag-pill tier-' + tier + '">' + escapeHtml(ph) + "</span></td><td>" + escapeHtml(cat) + "</td><td>" + escapeHtml(displayOrig) + "</td></tr>";
       }
       tbody.innerHTML = rowsHtml;
     }
@@ -1213,33 +1317,47 @@
     function toggleTheme() {
       currentTheme = currentTheme === "dark" ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", currentTheme);
-      document.getElementById("btnTheme").textContent = currentTheme === "dark" ? (currentLang === "zh" ? "☀️ 浅色模式" : "☀️ Light Mode") : (currentLang === "zh" ? "🌙 暗色模式" : "🌙 Dark Mode");
+      document.getElementById("btnTheme").textContent = currentTheme === "dark"
+        ? (currentLang === "zh" ? "☀️ 浅色模式" : "☀️ Light Mode")
+        : (currentLang === "zh" ? "🌙 暗色模式" : "🌙 Dark Mode");
     }
 
     function toggleLanguage() {
       currentLang = currentLang === "zh" ? "en" : "zh";
       var isZh = currentLang === "zh";
-      document.getElementById("lblBrandTitle").textContent = isZh ? "🛡️ AI Privacy Sanitizer · Web 纯内存安全版" : "🛡️ AI Privacy Sanitizer · RAM-Only Web Edition";
-      document.getElementById("lblBrandSub").textContent = isZh ? "100% 浏览器内存 (RAM) 运行 · 零网络请求 · 零 localStorage 落盘 · 关页即焚" : "100% Browser RAM Execution · Zero Network · Zero localStorage · Wipes on Close";
-      document.getElementById("lblSemanticIp").textContent = isZh ? "🌐 语义伪装模式 (IP / Email / Path)" : "🌐 Semantic Mode (IP / Email / Path)";
+      document.getElementById("lblBrandTitle").textContent = isZh ? "🛡️ Sanitizer · Web 纯内存安全版" : "🛡️ Sanitizer · RAM-Only Web Edition";
+      document.getElementById("lblCspBadge").textContent = isZh ? "🔒 CSP 零外联已锁定" : "🔒 CSP Zero-Network Enforced";
+      document.getElementById("lblBrandSub").textContent = isZh ? "100% 浏览器内存 (RAM) 运行 · 零网络请求 · 零 localStorage 落盘 · 关页即焚" : "100% Browser RAM · Zero Network · Zero localStorage · Wipes on Close";
+      document.getElementById("lblSemanticIp").textContent = isZh ? "🌐 语义伪装" : "🌐 Semantic Mode";
+      document.getElementById("lblAiHint").textContent = isZh ? "🤖 AI 防变形提示" : "🤖 AI Hint";
       document.getElementById("btnTheme").textContent = currentTheme === "dark" ? (isZh ? "☀️ 浅色模式" : "☀️ Light Mode") : (isZh ? "🌙 暗色模式" : "🌙 Dark Mode");
+      document.getElementById("lblSecBanner").innerHTML = isZh
+        ? '<span class="security-highlight">🔒 零残留承诺 (Zero-Storage + CSP)：</span> 已启用浏览器级 CSP (`connect-src \'none\'`) 禁止一切外发请求；所有密码与映射仅驻留当前标签页 RAM，绝不写入 localStorage / Cookie，关页即焚。'
+        : '<span class="security-highlight">🔒 Zero-Storage + CSP Guarantee:</span> Browser-enforced CSP (`connect-src \'none\'`) blocks all outbound network requests. All secrets stay strictly in tab RAM and vanish on close.';
       document.getElementById("btnSanitize").textContent = isZh ? "🛡️ 立即脱敏 ➔" : "🛡️ Sanitize Now ➔";
       document.getElementById("btnRestore").textContent = isZh ? "🔄 容错逆向还原" : "🔄 Fuzzy Restore";
       document.getElementById("btnCopyOutput").textContent = isZh ? "📑 复制右侧结果" : "📑 Copy Output";
       document.getElementById("btnClipSanitize").textContent = isZh ? "📋 读取剪贴板并脱敏" : "📋 Sanitize Clipboard";
-      document.getElementById("btnLoadSample").textContent = isZh ? "📋 载入全场景测试样本" : "📋 Load Full Sample";
+      document.getElementById("btnLocalFile").textContent = isZh ? "📄 拖入/选择本地文件" : "📄 Load Local File";
+      document.getElementById("btnDownloadOut").textContent = isZh ? "💾 导出右侧结果" : "💾 Export Output";
+      document.getElementById("btnLoadSample").textContent = isZh ? "📋 载入测试样本" : "📋 Load Sample";
       document.getElementById("btnClearBox").textContent = isZh ? "🧹 清空文本框" : "🧹 Clear Boxes";
-      document.getElementById("btnWipeVault").textContent = isZh ? "🔥 清空当前会话" : "🔥 Wipe Current Session";
+      document.getElementById("btnWipeVault").textContent = isZh ? "🔥 清空当前会话" : "🔥 Wipe Session";
       document.getElementById("lblLeftTitle").textContent = isZh ? "📥 原始文本 / AI 回复文本 (Input)" : "📥 Raw Input / AI Reply (Input)";
-      document.getElementById("lblInputHint").textContent = isZh ? "支持实时输入自动脱敏 & AI 变形占位符容错还原" : "Live auto-sanitize & fuzzy restore for AI-mutated placeholders";
-      document.getElementById("txtInput").placeholder = isZh ? "在此粘贴代码、日志、.env、密码-123123、账号=asdasd、C:\\Users\\YourName\\..." : "Paste raw code, logs, .env, passwords, API keys, or AI replies here...";
+      document.getElementById("lblInputHint").textContent = isZh ? "支持实时防抖脱敏、拖入 .env/.log 文件与 AI 变形还原" : "Debounced live sanitize, local file drop & fuzzy restore";
+      document.getElementById("txtInput").placeholder = isZh ? "在此粘贴或拖入代码、日志、.env、密码-123123、Authorization: Basic ..." : "Paste or drop raw code, logs, .env, passwords, API keys, or AI replies...";
       document.getElementById("lblRightTitle").textContent = isZh ? "🛡️ 脱敏后安全文本 / 还原结果 (Output)" : "🛡️ Sanitized Output / Restored Text";
       document.getElementById("txtOutput").placeholder = isZh ? "脱敏后的安全文本将显示在这里，可直接复制发给 ChatGPT / Claude..." : "Sanitized safe text will appear here, ready to paste into ChatGPT / Claude...";
       document.getElementById("lblDictTitle").textContent = isZh ? "📚 临时自定义词条 & 白名单（仅存当前内存，不落盘）" : "📚 Custom Words & Allowlist (RAM-Only)";
-      document.getElementById("lblCustomWordSub").textContent = isZh ? "1. 自定义敏感词条（优先最长匹配）" : "1. Custom Sensitive Terms (Longest Match First)";
+      document.getElementById("lblCustomWordSub").textContent = isZh ? "1. 自定义敏感词条（优先最长匹配 · 英文默认整词边界）" : "1. Custom Sensitive Terms (Longest Match · ASCII Whole-Word)";
+      document.getElementById("optCatCompany").textContent = isZh ? "COMPANY (公司)" : "COMPANY";
+      document.getElementById("optCatClient").textContent = isZh ? "CLIENT (客户)" : "CLIENT";
+      document.getElementById("optCatProject").textContent = isZh ? "PROJECT (项目)" : "PROJECT";
+      document.getElementById("optCatSecret").textContent = isZh ? "CUSTOM_SECRET (机密)" : "CUSTOM_SECRET";
       document.getElementById("inpCustomWord").placeholder = isZh ? "输入公司名 Sdn Bhd / 客户名（逗号分隔可批量添加）..." : "Enter company / client / project names (comma-separated)...";
       document.getElementById("btnAddWord").textContent = isZh ? "➕ 添加" : "➕ Add";
-      document.getElementById("lblAllowlistSub").textContent = isZh ? "2. 🛡️ 白名单 Allowlist（匹配白名单的值将跳过脱敏）" : "2. 🛡️ Allowlist (Matched values bypass sanitization)";
+      document.getElementById("lblAllowlistSub").textContent = isZh ? "2. 🛡️ 白名单 Allowlist（点击差异高亮芯片亦可一键加入）" : "2. 🛡️ Allowlist (Click diff chips to allowlist instantly)";
+      document.getElementById("btnRestoreAllow").textContent = isZh ? "↺ 恢复默认安全白名单" : "↺ Restore Default Safe Allowlist";
       document.getElementById("inpAllowlist").placeholder = isZh ? "输入不需脱敏的白名单值（如 127.0.0.1, safe@example.com，逗号分隔）..." : "Enter safe values to bypass sanitization (comma-separated)...";
       document.getElementById("btnAddAllow").textContent = isZh ? "➕ 加入白名单" : "➕ Add Allowlist";
       document.getElementById("lblVaultTitle").textContent = isZh ? "🔐 当前内存映射保险箱 (RAM Session Vault)" : "🔐 Active In-Memory Vault (RAM Only)";
@@ -1247,13 +1365,58 @@
       document.getElementById("thCategory").textContent = isZh ? "类别 (Category)" : "Category";
       document.getElementById("thOriginal").textContent = isZh ? "原始敏感值 (仅存内存)" : "Original Secret (RAM Only)";
       document.getElementById("btnToggleVaultMask").textContent = vaultMasked ? (isZh ? "👁️ 显示原始敏感值" : "👁️ Reveal Originals") : (isZh ? "🙈 遮罩原始敏感值" : "🙈 Mask Originals");
-      document.getElementById("btnToggleDiffView").textContent = diffPreviewActive ? (isZh ? "🔍 差异高亮预览: 开 (遵循原值遮罩)" : "🔍 Diff Highlight: ON (Hover)") : (isZh ? "🔍 差异高亮预览: 关" : "🔍 Diff Highlight: OFF");
+      document.getElementById("btnToggleDiffView").textContent = diffPreviewActive
+        ? (isZh ? "🔍 差异高亮预览: 开 (点击标签可放行)" : "🔍 Diff Highlight: ON (Click to Allowlist)")
+        : (isZh ? "🔍 差异高亮预览: 关" : "🔍 Diff Highlight: OFF");
+      document.getElementById("lblStatus").textContent = isZh
+        ? "🟢 就绪：100% 纯前端内存模式运行中（已同步桌面端全套规则、校验器与 CSP 零外联保护）"
+        : "🟢 Ready: 100% RAM-Only Web Edition (Desktop rule parity, validators & CSP zero-network active)";
+      updateIdleDisplay();
       renderDiffPreview(document.getElementById("txtOutput").value);
       renderVaultTable();
     }
 
+    // Event delegation for click-to-allowlist on diff chips & drag-and-drop file loading
+    (function wireInteractiveListeners() {
+      var diffBox = document.getElementById("diffPreviewBox");
+      if (diffBox && diffBox.addEventListener) {
+        diffBox.addEventListener("click", function (ev) {
+          var target = ev && ev.target;
+          var ph = target && target.getAttribute ? target.getAttribute("data-ph") : null;
+          if (ph && Object.prototype.hasOwnProperty.call(placeholderToOriginal, ph)) {
+            var orig = placeholderToOriginal[ph];
+            if (orig && !isAllowlisted(orig)) {
+              allowlistItems.push(orig);
+              renderAllowlist();
+              runSanitizePreview();
+              document.getElementById("lblStatus").textContent = currentLang === "zh"
+                ? "🏳️ 已将该值加入白名单并刷新预览"
+                : "🏳️ Added value to allowlist and refreshed preview";
+            }
+          }
+        });
+      }
+      var inputArea = document.getElementById("txtInput");
+      if (inputArea && inputArea.addEventListener) {
+        inputArea.addEventListener("dragover", function (ev) {
+          ev.preventDefault();
+          if (inputArea.classList) inputArea.classList.add("drag-over");
+        });
+        inputArea.addEventListener("dragleave", function () {
+          if (inputArea.classList) inputArea.classList.remove("drag-over");
+        });
+        inputArea.addEventListener("drop", function (ev) {
+          ev.preventDefault();
+          if (inputArea.classList) inputArea.classList.remove("drag-over");
+          var files = ev.dataTransfer && ev.dataTransfer.files;
+          if (files && files[0]) readLocalFileObject(files[0]);
+        });
+      }
+    })();
+
     renderCustomWords();
     renderAllowlist();
+    updateIdleDisplay();
   </script>
 </body>
 </html>
