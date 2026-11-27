@@ -10,9 +10,19 @@ import re
 import secrets
 import sys
 import threading
+import time
 from typing import Any, Dict, List, Optional, Pattern, Tuple
 
-from src.rules import BUILTIN_RULES, RULE_PRESETS, SanitizeRule
+from src.regex_safety import (
+    CompiledCustomRule,
+    RUNTIME_RULE_TIMEOUT_SECONDS,
+    RegexSafetyError,
+    RegexTimeoutError,
+    sanitize_category_name,
+    validate_custom_regex,
+    validate_placeholder_template,
+)
+from src.rules import BUILTIN_RULES, HIGH_ENTROPY_ASSIGNMENT_RULE, RULE_PRESETS, SanitizeRule
 from src.secure_io import atomic_write_private, validate_private_path
 from src.vault_crypto import (
     decrypt_vault_payload,
@@ -154,6 +164,7 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
     "idle_wipe_minutes": 30,
     "hud_enabled": True,
     "clipboard_privacy_guard": True,
+    "entropy_detection_enabled": False,
     "hotkeys": {
         "sanitize": "alt+s",
         "restore": "alt+r",
@@ -165,6 +176,7 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
         "example.com",
     ],
     "disabled_rules": [],
+    "custom_regex_rules": [],
     "custom_dictionary": {
         "COMPANY": [
             "Acme Global Technologies Sdn Bhd",
@@ -197,6 +209,7 @@ class SanitizeResult:
     sanitized_text: str
     total_count: int = 0
     category_counts: Dict[str, int] = field(default_factory=dict)
+    matched_items: List[Tuple[str, str, str]] = field(default_factory=list)
 
     def format_summary(self, lang: str = "zh") -> str:
         """Format a human-readable notification message in Simplified Chinese or English."""
@@ -425,8 +438,14 @@ class SessionVault:
     @staticmethod
     def _loaded_placeholder_index(placeholder: str, category: str) -> int:
         """Accept only placeholders produced by the built-in engine or custom categories."""
-        templates = {"[{category}_{index}]"}
+        templates = {
+            "[{category}_{index}]",
+            "<{category}_{index}>",
+            "{{{category}_{index}}}",
+        }
         templates.update(rule.placeholder_template for rule in BUILTIN_RULES if rule.category == category)
+        if category == HIGH_ENTROPY_ASSIGNMENT_RULE.category:
+            templates.add(HIGH_ENTROPY_ASSIGNMENT_RULE.placeholder_template)
         marker = "\x00APS_INDEX\x00"
         while marker in category:
             marker += "\x00"
@@ -531,8 +550,11 @@ class PrivacySanitizer:
         config_path: Optional[Path] = None,
         example_config_path: Optional[Path] = None,
         rules: Optional[List[SanitizeRule]] = None,
+        *,
+        read_only: bool = False,
     ) -> None:
         self._explicit_config_path = config_path is not None
+        self._read_only = bool(read_only)
         self.config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
         self.example_config_path = (
             Path(example_config_path) if example_config_path else EXAMPLE_CONFIG_PATH
@@ -543,7 +565,8 @@ class PrivacySanitizer:
         self._config_mtime: float = -1.0
         self._config_data: Dict[str, Any] = {}
         self._persisted_config: Dict[str, Any] = {}
-        self.ensure_config_exists()
+        if not self._read_only:
+            self.ensure_config_exists()
         self.reload_config(force=True)
 
     def ensure_config_exists(self) -> Path:
@@ -591,8 +614,18 @@ class PrivacySanitizer:
     def reload_config(self, force: bool = False) -> Dict[str, Any]:
         """Reload `config.json` if modified since last read or if forced."""
         with self._config_lock:
-            self.ensure_config_exists()
+            if not self._read_only:
+                self.ensure_config_exists()
             try:
+                if self._read_only and not self.config_path.exists():
+                    if self.example_config_path.exists():
+                        loaded = json.loads(self.example_config_path.read_text(encoding="utf-8"))
+                    else:
+                        loaded = copy.deepcopy(DEFAULT_CONFIG_TEMPLATE)
+                    if isinstance(loaded, dict):
+                        self._config_data = loaded
+                        self._persisted_config = copy.deepcopy(loaded)
+                    return self._config_data
                 mtime = self.config_path.stat().st_mtime
                 if force or mtime != self._config_mtime:
                     raw = self.config_path.read_text(encoding="utf-8")
@@ -624,6 +657,7 @@ class PrivacySanitizer:
             "custom_word_whole_word",
             "hud_enabled",
             "clipboard_privacy_guard",
+            "entropy_detection_enabled",
         ):
             if bool_key in validated and not isinstance(validated[bool_key], bool):
                 raise ValueError(f"Invalid boolean setting: {bool_key}")
@@ -648,6 +682,36 @@ class PrivacySanitizer:
                 not isinstance(x, str) for x in validated["disabled_rules"]
             ):
                 raise ValueError("Invalid disabled_rules section")
+        if "custom_regex_rules" in validated:
+            raw_rules = validated["custom_regex_rules"]
+            if not isinstance(raw_rules, list):
+                raise ValueError("Invalid custom_regex_rules section")
+            normalized_rules = []
+            seen_names = set()
+            for entry in raw_rules:
+                if not isinstance(entry, dict):
+                    raise ValueError("Invalid custom_regex_rules entry")
+                name = str(entry.get("name", "")).strip()
+                pattern_str = str(entry.get("pattern", ""))
+                category = sanitize_category_name(str(entry.get("category", "CUSTOM_REGEX")))
+                template = str(entry.get("placeholder_template", "[{category}_{index}]")).strip() or "[{category}_{index}]"
+                enabled = entry.get("enabled", True)
+                if not name or not isinstance(enabled, bool):
+                    raise ValueError("Invalid custom_regex_rules entry fields")
+                lowered_name = name.lower()
+                if lowered_name in seen_names:
+                    raise ValueError("Duplicate custom_regex_rules rule name")
+                seen_names.add(lowered_name)
+                validate_custom_regex(pattern_str)
+                template = validate_placeholder_template(template, category)
+                normalized_rules.append({
+                    "name": name,
+                    "category": category,
+                    "pattern": pattern_str,
+                    "placeholder_template": template,
+                    "enabled": enabled,
+                })
+            validated["custom_regex_rules"] = normalized_rules
         if "custom_dictionary" in validated:
             cd = validated["custom_dictionary"]
             if not isinstance(cd, dict):
@@ -782,6 +846,17 @@ class PrivacySanitizer:
         with self._config_lock:
             self.reload_config()
             self._config_data["clipboard_privacy_guard"] = bool(enabled)
+            self.save_config()
+
+    @property
+    def entropy_detection_enabled(self) -> bool:
+        self.reload_config()
+        return bool(self._config_data.get("entropy_detection_enabled", False))
+
+    def set_entropy_detection_enabled(self, enabled: bool) -> None:
+        with self._config_lock:
+            self.reload_config()
+            self._config_data["entropy_detection_enabled"] = bool(enabled)
             self.save_config()
 
     @property
@@ -1020,10 +1095,174 @@ class PrivacySanitizer:
                 merged["custom_dictionary"] = validated["custom_dictionary"]
                 if "allowlist" in validated:
                     merged["allowlist"] = validated["allowlist"]
+                if "custom_regex_rules" in validated:
+                    merged["custom_regex_rules"] = validated["custom_regex_rules"]
                 self.save_config(merged)
             else:
                 self.save_config(validated)
             return self._config_data
+
+    def get_custom_regex_rules(self) -> List[Dict[str, Any]]:
+        """Return normalized list of user-defined custom regex rules."""
+        self.reload_config()
+        raw = self._config_data.get("custom_regex_rules", [])
+        if not isinstance(raw, list):
+            return []
+        result: List[Dict[str, Any]] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name", "")).strip()
+            pattern_str = str(entry.get("pattern", ""))
+            category = sanitize_category_name(str(entry.get("category", "CUSTOM_REGEX")))
+            template = str(entry.get("placeholder_template", "[{category}_{index}]")).strip() or "[{category}_{index}]"
+            enabled = bool(entry.get("enabled", True))
+            if not name or not pattern_str:
+                continue
+            result.append({
+                "name": name,
+                "category": category,
+                "pattern": pattern_str,
+                "placeholder_template": template,
+                "enabled": enabled,
+            })
+        return result
+
+    def _compile_custom_regex_rules(self) -> List[CompiledCustomRule]:
+        compiled_list: List[CompiledCustomRule] = []
+        for item in self.get_custom_regex_rules():
+            if not item.get("enabled", True):
+                continue
+            try:
+                compiled_pat, target_group = validate_custom_regex(item["pattern"])
+                template = validate_placeholder_template(item["placeholder_template"], item["category"])
+            except RegexSafetyError:
+                continue
+            compiled_list.append(
+                CompiledCustomRule(
+                    name=item["name"],
+                    category=item["category"],
+                    pattern_text=item["pattern"],
+                    pattern=compiled_pat,
+                    placeholder_template=template,
+                    target_group=target_group,
+                    enabled=True,
+                )
+            )
+        return compiled_list
+
+    def add_custom_regex_rule(
+        self,
+        name: str,
+        pattern: str,
+        category: str = "CUSTOM_REGEX",
+        placeholder_template: str = "[{category}_{index}]",
+        enabled: bool = True,
+    ) -> Dict[str, Any]:
+        """Validate for syntax & ReDoS safety, then add a user-defined custom regex rule."""
+        cleaned_name = str(name or "").strip()
+        if not cleaned_name:
+            raise RegexSafetyError("Rule name cannot be empty")
+        cat = sanitize_category_name(category)
+        validate_custom_regex(pattern)
+        tpl = validate_placeholder_template(placeholder_template, cat)
+        new_entry = {
+            "name": cleaned_name,
+            "category": cat,
+            "pattern": pattern,
+            "placeholder_template": tpl,
+            "enabled": bool(enabled),
+        }
+        with self._config_lock:
+            current = self.get_custom_regex_rules()
+            if any(item["name"].lower() == cleaned_name.lower() for item in current):
+                raise ValueError(f"Duplicate custom regex rule name: {cleaned_name}")
+            current.append(new_entry)
+            self._config_data["custom_regex_rules"] = current
+            self.save_config()
+        return new_entry
+
+    def set_custom_regex_rule_enabled(self, name: str, enabled: bool) -> bool:
+        """Enable or disable a user-defined custom regex rule by name."""
+        cleaned = str(name or "").strip().lower()
+        if not cleaned:
+            return False
+        with self._config_lock:
+            current = self.get_custom_regex_rules()
+            found = False
+            for item in current:
+                if item["name"].lower() == cleaned:
+                    item["enabled"] = bool(enabled)
+                    found = True
+                    break
+            if not found:
+                return False
+            self._config_data["custom_regex_rules"] = current
+            self.save_config()
+            return True
+
+    def remove_custom_regex_rule(self, name: str) -> bool:
+        """Delete a user-defined custom regex rule by name."""
+        cleaned = str(name or "").strip().lower()
+        if not cleaned:
+            return False
+        with self._config_lock:
+            current = self.get_custom_regex_rules()
+            updated = [item for item in current if item["name"].lower() != cleaned]
+            if len(updated) == len(current):
+                return False
+            self._config_data["custom_regex_rules"] = updated
+            self.save_config()
+            return True
+
+    @staticmethod
+    def test_custom_regex_rule(
+        pattern: str,
+        sample_text: str,
+        category: str = "CUSTOM_REGEX",
+        placeholder_template: str = "[{category}_{index}]",
+    ) -> Dict[str, Any]:
+        """Validate a custom regex live and preview matches against `sample_text` in an isolated vault."""
+        cat = sanitize_category_name(category)
+        try:
+            compiled, target_group = validate_custom_regex(pattern, sample_text=sample_text)
+            tpl = validate_placeholder_template(placeholder_template, cat)
+        except RegexSafetyError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        vault = SessionVault()
+        matches: List[str] = []
+        t0 = time.perf_counter()
+        deadline = t0 + RUNTIME_RULE_TIMEOUT_SECONDS
+
+        def _repl(match: re.Match) -> str:
+            if time.perf_counter() > deadline:
+                raise RegexTimeoutError("Regex execution timed out")
+            if target_group:
+                val = match.group(target_group)
+                if not val:
+                    return match.group(0)
+                matches.append(val)
+                ph = vault.get_or_create_placeholder(val, cat, template=tpl)
+                rel_start = match.start(target_group) - match.start(0)
+                rel_end = match.end(target_group) - match.start(0)
+                return match.group(0)[:rel_start] + ph + match.group(0)[rel_end:]
+            val = match.group(0)
+            matches.append(val)
+            return vault.get_or_create_placeholder(val, cat, template=tpl)
+
+        try:
+            sanitized = compiled.sub(_repl, sample_text or "")
+        except RegexTimeoutError as exc:
+            return {"ok": False, "error": str(exc)}
+        elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        return {
+            "ok": True,
+            "matches": matches,
+            "sanitized": sanitized,
+            "target_group": target_group,
+            "elapsed_ms": elapsed_ms,
+        }
 
     def _get_sorted_custom_terms(self) -> List[Tuple[str, str]]:
         """Return list of (term, category) sorted by term length descending (longest match first)."""
@@ -1050,20 +1289,23 @@ class PrivacySanitizer:
         *,
         vault: Optional[SessionVault] = None,
         include_ai_hint: Optional[bool] = None,
+        entropy_enabled: Optional[bool] = None,
     ) -> SanitizeResult:
-        """Sanitize text using Layer 1 (Custom Dictionary) followed by Layer 2 (Regex Rules)."""
+        """Sanitize text using Layer 1 (Custom Dictionary), Custom Regex Rules, and Layer 2 (Built-in + Optional Entropy)."""
         if len(text) > MAX_SANITIZE_CHARS:
             raise InputTooLargeError()
         if not text:
-            return SanitizeResult(sanitized_text=text, total_count=0, category_counts={})
+            return SanitizeResult(sanitized_text=text, total_count=0, category_counts={}, matched_items=[])
 
         active_vault = self.vault if vault is None else vault
         semantic_ip = self.semantic_ip_mode
         whole_word = self.custom_word_whole_word
         use_ai_hint = self.ai_prompt_hint if include_ai_hint is None else bool(include_ai_hint)
+        use_entropy = self.entropy_detection_enabled if entropy_enabled is None else bool(entropy_enabled)
         allowlist_lower = {w.lower() for w in self.get_allowlist()}
         disabled_set = set(self.get_disabled_rules())
         category_counts: Dict[str, int] = {}
+        matched_items_map: Dict[Tuple[str, str, str], None] = {}
         total_count = 0
 
         sentinel_to_placeholder: Dict[str, str] = {}
@@ -1131,10 +1373,11 @@ class PrivacySanitizer:
             placeholder_to_sentinel[placeholder] = sentinel
             return sentinel
 
-        def record_hit(category: str) -> None:
+        def record_hit(category: str, placeholder: str, original: str) -> None:
             nonlocal total_count
             total_count += 1
             category_counts[category] = category_counts.get(category, 0) + 1
+            matched_items_map[(placeholder, original, category)] = None
 
         working_text = text
 
@@ -1169,19 +1412,77 @@ class PrivacySanitizer:
                     template="[{category}_{index}]",
                     semantic_ip_mode=semantic_ip,
                 )
-                record_hit(cat)
+                record_hit(cat, ph, matched_val)
                 return allocate_sentinel(ph)
 
             working_text = protected_sub(pattern, _dict_replacer)
 
-        # --- Layer 2: Built-in High-Strength Regex Engine ---
+        # --- Layer 1B: User-Defined Custom Regex Rules (with runtime deadline guard) ---
+        for custom_rule in self._compile_custom_regex_rules():
+            rule_deadline = time.monotonic() + RUNTIME_RULE_TIMEOUT_SECONDS
+            before_custom = working_text
+
+            def _custom_rule_replacer(
+                match: re.Match,
+                c_rule: CompiledCustomRule = custom_rule,
+                deadline: float = rule_deadline,
+            ) -> str:
+                if time.monotonic() > deadline:
+                    raise RegexTimeoutError("Custom regex execution timed out")
+                full_match = match.group(0)
+                if not full_match or full_match in sentinel_to_placeholder:
+                    return full_match
+                if c_rule.target_group:
+                    secret_val = match.group(c_rule.target_group)
+                    if not secret_val or secret_val in sentinel_to_placeholder:
+                        return full_match
+                    secret_val = unprotect(secret_val)
+                    if (
+                        secret_val.lower() in allowlist_lower
+                        or full_match.lower() in allowlist_lower
+                    ):
+                        return full_match
+                    ph = active_vault.get_or_create_placeholder(
+                        original=secret_val,
+                        category=c_rule.category,
+                        template=c_rule.placeholder_template,
+                        semantic_ip_mode=semantic_ip,
+                    )
+                    record_hit(c_rule.category, ph, secret_val)
+                    sentinel = allocate_sentinel(ph)
+                    rel_start = match.start(c_rule.target_group) - match.start(0)
+                    rel_end = match.end(c_rule.target_group) - match.start(0)
+                    return full_match[:rel_start] + sentinel + full_match[rel_end:]
+
+                original_match = unprotect(full_match)
+                if original_match.lower() in allowlist_lower:
+                    return full_match
+                ph = active_vault.get_or_create_placeholder(
+                    original=original_match,
+                    category=c_rule.category,
+                    template=c_rule.placeholder_template,
+                    semantic_ip_mode=semantic_ip,
+                )
+                record_hit(c_rule.category, ph, original_match)
+                return allocate_sentinel(ph)
+
+            try:
+                working_text = protected_sub(custom_rule.pattern, _custom_rule_replacer)
+            except RegexTimeoutError:
+                working_text = before_custom
+
+        # --- Layer 2: Built-in High-Strength Regex Engine (+ Optional High-Entropy Fallback) ---
         working_lower: Optional[str] = None
         working_is_ascii: Optional[bool] = None
         working_has_quote: Optional[bool] = None
 
-        for rule in self.rules:
-            if not rule.enabled_by_default or rule.name in disabled_set:
-                continue
+        layer2_rules = [
+            r for r in self.rules if r.enabled_by_default and r.name not in disabled_set
+        ]
+        if use_entropy:
+            layer2_rules.append(HIGH_ENTROPY_ASSIGNMENT_RULE)
+
+        for rule in layer2_rules:
             if rule.require_non_ascii:
                 if working_is_ascii is None:
                     working_is_ascii = working_text.isascii()
@@ -1225,7 +1526,7 @@ class PrivacySanitizer:
                         template=current_rule.placeholder_template,
                         semantic_ip_mode=semantic_ip,
                     )
-                    record_hit(current_rule.category)
+                    record_hit(current_rule.category, ph, secret_val)
                     sentinel = allocate_sentinel(ph)
                     rel_start = match.start(current_rule.target_group) - match.start(0)
                     rel_end = match.end(current_rule.target_group) - match.start(0)
@@ -1245,7 +1546,7 @@ class PrivacySanitizer:
                     template=current_rule.placeholder_template,
                     semantic_ip_mode=semantic_ip,
                 )
-                record_hit(current_rule.category)
+                record_hit(current_rule.category, ph, original_match)
                 return allocate_sentinel(ph)
 
             working_text = protected_sub(rule.pattern, _rule_replacer)
@@ -1271,6 +1572,7 @@ class PrivacySanitizer:
             sanitized_text=working_text,
             total_count=total_count,
             category_counts=category_counts,
+            matched_items=list(matched_items_map.keys()),
         )
 
     def restore(self, text: str, *, vault: Optional[SessionVault] = None) -> RestoreResult:

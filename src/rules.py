@@ -1,6 +1,7 @@
 """Built-in high-strength regex rule definitions, validators, metadata, and sample payloads."""
 
 from dataclasses import dataclass
+import math
 from typing import Callable, List, Optional, Pattern, Tuple
 import re
 
@@ -267,14 +268,14 @@ def _compile_rules() -> List[SanitizeRule]:
         SanitizeRule(
             name="stripe_live_test_key",
             category="API_KEY",
-            pattern=re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{16,}\b"),
+            pattern=re.compile(r"\b(?:(?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{16,}|whsec_[0-9a-zA-Z]{24,})\b"),
             placeholder_template="<API_KEY_{index}>",
-            label_zh="Stripe 支付密钥",
-            label_en="Stripe Live / Test API Key",
-            example="sk_live_51Nz0123...",
+            label_zh="Stripe 支付与 Webhook 密钥",
+            label_en="Stripe Live / Test / Webhook Key",
+            example="sk_live_51Nz0123... / whsec_...",
             group="credentials",
             presets=("dev", "hr", "strict"),
-            fast_tokens=("_live_", "_test_"),
+            fast_tokens=("_live_", "_test_", "whsec_"),
         ),
         SanitizeRule(
             name="github_token",
@@ -344,7 +345,7 @@ def _compile_rules() -> List[SanitizeRule]:
         SanitizeRule(
             name="telegram_bot_token",
             category="API_KEY",
-            pattern=re.compile(r"\b\d{8,10}:AA[A-Za-z0-9_\-]{33}\b"),
+            pattern=re.compile(r"\b\d{8,10}:AA[A-Za-z0-9_\-]{32,35}\b"),
             placeholder_template="<API_KEY_{index}>",
             label_zh="Telegram Bot 令牌",
             label_en="Telegram Bot Token",
@@ -369,16 +370,50 @@ def _compile_rules() -> List[SanitizeRule]:
             name="cloudflare_or_do_or_linear_or_supabase_token",
             category="API_KEY",
             pattern=re.compile(
-                r"\b(?:dop_v1_[a-f0-9]{64}|lin_api_[A-Za-z0-9]{40}|sbp_[a-f0-9]{40}|"
+                r"\b(?:dop_v1_[a-f0-9]{64}|lin_api_[A-Za-z0-9]{32,}|sbp_[a-f0-9]{40}|"
                 r"PMAK-[a-f0-9]{24}-[a-f0-9]{34}|shpat_[a-fA-F0-9]{32})\b"
             ),
             placeholder_template="<API_KEY_{index}>",
             label_zh="DigitalOcean / Linear / Supabase / Postman / Shopify 令牌",
             label_en="DigitalOcean / Linear / Supabase / Postman / Shopify Token",
-            example="dop_v1_..., sbp_..., shpat_...",
+            example="dop_v1_..., lin_api_..., sbp_..., shpat_...",
             group="credentials",
             presets=("dev", "hr", "strict"),
             fast_tokens=("dop_v1_", "lin_api_", "sbp_", "pmak-", "shpat_"),
+        ),
+        SanitizeRule(
+            name="cloudflare_vercel_databricks_supabase_token",
+            category="API_KEY",
+            pattern=re.compile(
+                r"\b(?:(?:cfut|cfat|cfrt)_[A-Za-z0-9_\-]{28,}|"
+                r"v1\.0-[A-Fa-f0-9]{24}-[A-Fa-f0-9]{64,}|"
+                r"sb_secret_[A-Za-z0-9_\-]{20,}|"
+                r"vercel_(?:pat|tok|secret)_[A-Za-z0-9_\-]{20,}|"
+                r"vc[pk]_[A-Za-z0-9_\-]{24,}|"
+                r"dapi[0-9a-fA-F]{32}(?:-\d)?)\b"
+            ),
+            placeholder_template="<API_KEY_{index}>",
+            label_zh="Cloudflare / Vercel / Databricks / Supabase 平台令牌",
+            label_en="Cloudflare / Vercel / Databricks / Supabase Platform Token",
+            example="cfut_..., sb_secret_..., vercel_pat_..., dapi...",
+            group="credentials",
+            presets=("dev", "hr", "strict"),
+            fast_tokens=("cfut_", "cfat_", "cfrt_", "v1.0-", "sb_secret_", "vercel_", "vcp_", "vck_", "dapi"),
+        ),
+        SanitizeRule(
+            name="azure_connection_string_secret",
+            category="API_KEY",
+            pattern=re.compile(
+                r"(?i)\b(?:AccountKey|SharedAccessKey|SharedAccessSignature)=(?P<secret>[^\s;'\"`\]\}]{16,})"
+            ),
+            placeholder_template="<API_KEY_{index}>",
+            target_group="secret",
+            label_zh="Azure 存储 / 服务总线连接串密钥",
+            label_en="Azure Connection String AccountKey / SharedAccessKey",
+            example="AccountKey=AbCdEf...==;EndpointSuffix=...",
+            group="credentials",
+            presets=("dev", "hr", "strict"),
+            fast_tokens=("accountkey=", "sharedaccesskey=", "sharedaccesssignature="),
         ),
         SanitizeRule(
             name="azure_sas_url",
@@ -860,6 +895,60 @@ def _compile_rules() -> List[SanitizeRule]:
             presets=("dev", "hr", "strict"),
             fast_tokens=("key", "secret", "token", "session", "cookie", "jwt", "ak", "sk", "pk", "tk"),
         ),
+        # 7B-2. Structured .env / JSON / YAML / URL Query Platform Secret Keys
+        SanitizeRule(
+            name="structured_config_quoted_secret",
+            category="API_KEY",
+            pattern=re.compile(
+                r"(?i)" + _EN_DELIM_START + r"(?:"
+                r"(?:service[_-]?role|anon|signing|encryption|decrypt|master|hmac|webhook|"
+                r"cloudflare|supabase|vercel|databricks|telegram|resend|twilio|stripe|"
+                r"openai|anthropic|gemini|github|gitlab|aws|gcp|azure)[_-]?"
+                r"(?:api[_-]?|auth[_-]?|access[_-]?|bot[_-]?|pat[_-]?|client[_-]?|private[_-]?|admin[_-]?)?"
+                r"(?:key|secret|token|pass(?:word)?|pwd|dsn|cred(?:ential)?s?)|"
+                r"x[-_]api[-_]key|connection[_-]?string|conn[_-]?str|auth[_-]?secret|"
+                r"signing[_-]?secret|webhook[_-]?secret|api[_-]?secret|signature"
+                r")\b['\"`]?"
+                + _EN_SEP
+                + r"(?P<q>['\"`])(?![\$\{])(?P<secret>[^'\"`\r\n]{6,})(?P=q)"
+            ),
+            placeholder_template="<API_KEY_{index}>",
+            target_group="secret",
+            label_zh="结构化配置引号密钥 (.env / JSON / YAML)",
+            label_en="Structured Config Quoted Secret (.env / JSON / YAML)",
+            example='signing_secret: "wh_sec_..."',
+            group="kv",
+            presets=("dev", "hr", "strict"),
+            fast_tokens=("key", "secret", "token", "pass", "pwd", "dsn", "cred", "conn", "signature"),
+            require_quote=True,
+        ),
+        SanitizeRule(
+            name="structured_config_unquoted_secret",
+            category="API_KEY",
+            pattern=re.compile(
+                r"(?i)" + _EN_DELIM_START + r"(?:"
+                r"(?:service[_-]?role|anon|signing|encryption|decrypt|master|hmac|webhook|"
+                r"cloudflare|supabase|vercel|databricks|telegram|resend|twilio|stripe|"
+                r"openai|anthropic|gemini|github|gitlab|aws|gcp|azure)[_-]?"
+                r"(?:api[_-]?|auth[_-]?|access[_-]?|bot[_-]?|pat[_-]?|client[_-]?|private[_-]?|admin[_-]?)?"
+                r"(?:key|secret|token|pass(?:word)?|pwd|dsn|cred(?:ential)?s?)|"
+                r"x[-_]api[-_]key|connection[_-]?string|conn[_-]?str|auth[_-]?secret|"
+                r"signing[_-]?secret|webhook[_-]?secret|api[_-]?secret|signature"
+                r")\b['\"`]?"
+                + _EN_SEP
+                + r"['\"`]?"
+                + _NON_SECRET_LOOKAHEAD
+                + r"(?P<secret>[^\s#;,&)'\"`\]\}\r\n]{6,})['\"`]?"
+            ),
+            placeholder_template="<API_KEY_{index}>",
+            target_group="secret",
+            label_zh="结构化配置无引号密钥 (.env / YAML / URL)",
+            label_en="Structured Config Secret (.env / YAML / URL Query)",
+            example="SUPABASE_SERVICE_ROLE_KEY=eyJ... | ?signature=...",
+            group="kv",
+            presets=("dev", "hr", "strict"),
+            fast_tokens=("key", "secret", "token", "pass", "pwd", "dsn", "cred", "conn", "signature"),
+        ),
         # 7C. Shorthand IC / NRIC / MyKad / SSN / TIN / SSM Assignments
         SanitizeRule(
             name="ic_nric_assignment",
@@ -954,6 +1043,69 @@ def _compile_rules() -> List[SanitizeRule]:
 
 
 BUILTIN_RULES: List[SanitizeRule] = _compile_rules()
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_HEX_RE = re.compile(r"^[0-9a-fA-F]{32,128}$")
+
+
+def shannon_entropy(value: str) -> float:
+    """Compute Shannon entropy in bits per character."""
+    if not value:
+        return 0.0
+    length = len(value)
+    counts: dict[str, int] = {}
+    for ch in value:
+        counts[ch] = counts.get(ch, 0) + 1
+    entropy = 0.0
+    for count in counts.values():
+        p = count / length
+        entropy -= p * math.log2(p)
+    return entropy
+
+
+def is_high_entropy_secret(value: str) -> bool:
+    """Return True when an assignment RHS token looks like a random high-entropy secret."""
+    if not value or not (20 <= len(value) <= 128):
+        return False
+    if any(ch.isspace() for ch in value):
+        return False
+    if "://" in value or "/" in value or "\\" in value:
+        return False
+    if _UUID_RE.fullmatch(value):
+        return False
+    if len(set(value)) < 8:
+        return False
+    if _HEX_RE.fullmatch(value):
+        return shannon_entropy(value) >= 3.0
+    has_alpha = any(ch.isascii() and ch.isalpha() for ch in value)
+    has_digit = any(ch.isascii() and ch.isdigit() for ch in value)
+    if not (has_alpha and has_digit):
+        return False
+    return shannon_entropy(value) >= 3.6
+
+
+HIGH_ENTROPY_ASSIGNMENT_RULE = SanitizeRule(
+    name="high_entropy_assignment_secret",
+    category="HIGH_ENTROPY",
+    pattern=re.compile(
+        r"(?i)(?:^|(?<=[\s'\"`(\[{,;?&]))"
+        r"(?!(?:commit|sha|sha1|sha256|md5|hash|etag|version|uuid|guid|"
+        r"trace[_-]?id|request[_-]?id|correlation[_-]?id|span[_-]?id|url|uri|path|href|src|"
+        r"checksum|digest|integrity|class|type|id|name)\b['\"`]?[ \t]*[:=])"
+        r"[A-Za-z_][A-Za-z0-9_.\-]{1,63}['\"`]?[ \t]*[:=][ \t]*['\"`]?"
+        r"(?P<secret>[A-Za-z0-9+/=_\-]{20,128})['\"`]?(?=[\s#;,&)'\"`\]\}\r\n]|$)"
+    ),
+    placeholder_template="<HIGH_ENTROPY_{index}>",
+    target_group="secret",
+    validator=is_high_entropy_secret,
+    enabled_by_default=False,
+    label_zh="高信息熵随机密钥兜底检测（赋值语句右侧）",
+    label_en="High-Entropy Random Secret Fallback (Assignment RHS)",
+    example="custom_opaque_cred = xK9mPq2vLz8nRt4wYb7cJd5h",
+    group="credentials",
+    presets=(),
+    fast_tokens=("=", ":"),
+)
 
 RULE_PRESETS = {
     "dev": [r.name for r in BUILTIN_RULES if "dev" in r.presets],

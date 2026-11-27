@@ -9,11 +9,15 @@ import pytest
 
 
 def _is_transient_windows_tcl_init_error(exc: BaseException) -> bool:
-    """Return True when Windows Tcl raises the transient init.tcl 'No error' race."""
+    """Return True when Windows Tcl/Tk raises a transient init.tcl / tk.tcl handle race."""
     if sys.platform != "win32" or not isinstance(exc, tk.TclError):
         return False
     msg = str(exc).lower()
-    return "init.tcl" in msg and "no error" in msg
+    return (
+        ("init.tcl" in msg and "no error" in msg)
+        or "usable tk.tcl" in msg
+        or "tcl_findlibrary" in msg
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -25,12 +29,13 @@ def _collect_tk_garbage_after_test():
 
 @pytest.fixture(autouse=True, scope="session")
 def _guard_windows_tcl_init():
-    """Retry tk.Tcl() on the transient Windows Python 3.11 init.tcl handle race."""
+    """Retry tk.Tcl() / tk.Tk() on transient Windows Python 3.11 Tcl/Tk init races."""
     if sys.platform != "win32":
         yield
         return
 
     original_tcl = tk.Tcl
+    original_tk_init = tk.Tk.__init__
 
     def _safe_tcl(*args, **kwargs):
         for attempt in range(5):
@@ -42,8 +47,20 @@ def _guard_windows_tcl_init():
                 gc.collect()
                 time.sleep(0.05 * (attempt + 1))
 
+    def _safe_tk_init(self, *args, **kwargs):
+        for attempt in range(5):
+            try:
+                return original_tk_init(self, *args, **kwargs)
+            except tk.TclError as exc:
+                if attempt == 4 or not _is_transient_windows_tcl_init_error(exc):
+                    raise
+                gc.collect()
+                time.sleep(0.05 * (attempt + 1))
+
     tk.Tcl = _safe_tcl
+    tk.Tk.__init__ = _safe_tk_init
     try:
         yield
     finally:
         tk.Tcl = original_tcl
+        tk.Tk.__init__ = original_tk_init

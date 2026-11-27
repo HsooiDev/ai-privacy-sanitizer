@@ -290,6 +290,10 @@
         <input type="checkbox" id="chkAiHint" onchange="runSanitizePreview()" />
         <span id="lblAiHint">🤖 AI 防变形提示</span>
       </label>
+      <label style="font-size:13px; display:flex; align-items:center; gap:5px; cursor:pointer;">
+        <input type="checkbox" id="chkEntropy" onchange="runSanitizePreview()" />
+        <span id="lblEntropy">🧬 高熵兜底</span>
+      </label>
       <button onclick="toggleLanguage()" id="btnLang">🌐 EN / 简中</button>
       <button onclick="toggleTheme()" id="btnTheme">☀️ 浅色模式</button>
     </div>
@@ -417,7 +421,7 @@
       en: "# [Sanitizer: Keep redacted placeholders verbatim in your reply]"
     };
     var RISK_TIERS = {
-      PRIVATE_KEY: "api", API_KEY: "api", DB_PASS: "pass",
+      PRIVATE_KEY: "api", API_KEY: "api", HIGH_ENTROPY: "api", DB_PASS: "pass",
       ID_CARD: "pii", BANK_CARD: "pii", PASSPORT: "pii", PHONE: "pii", EMAIL: "pii", USER_ID: "pii",
       PRIVATE_IP: "net", PUBLIC_IP: "net", IPV6: "net", MAC_ADDR: "net", USER_PATH: "net"
     };
@@ -807,15 +811,17 @@
       // 2. Explicit API Keys, Cloud Tokens, HTTP Basic & Bearer Auth
       replaceFull(/\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\bsk-(?:proj-|ant-api\d{2}-|ant-|or-v\d+-|live-|test-)?[A-Za-z0-9_\-]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b(?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:(?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{16,}|whsec_[0-9a-zA-Z]{24,})\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_\-]{20,}|gldt-[A-Za-z0-9_\-]{20,}|glrt-[A-Za-z0-9_\-]{20,})\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\b(?:gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_\-]{24,})\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\bAIza[0-9A-Za-z_\-]{35}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\bxox[baprs]-[0-9A-Za-z\-]{10,}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b\d{8,10}:AA[A-Za-z0-9_\-]{33}\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b\d{8,10}:AA[A-Za-z0-9_\-]{32,35}\b/g, "API_KEY", "<API_KEY_{index}>");
       replaceFull(/\bSG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\b/g, "API_KEY", "<API_KEY_{index}>");
-      replaceFull(/\b(?:dop_v1_[a-f0-9]{64}|lin_api_[A-Za-z0-9]{40}|sbp_[a-f0-9]{40}|PMAK-[a-f0-9]{24}-[a-f0-9]{34}|shpat_[a-fA-F0-9]{32})\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:dop_v1_[a-f0-9]{64}|lin_api_[A-Za-z0-9]{32,}|sbp_[a-f0-9]{40}|PMAK-[a-f0-9]{24}-[a-f0-9]{34}|shpat_[a-fA-F0-9]{32})\b/g, "API_KEY", "<API_KEY_{index}>");
+      replaceFull(/\b(?:(?:cfut|cfat|cfrt)_[A-Za-z0-9_\-]{28,}|v1\.0-[A-Fa-f0-9]{24}-[A-Fa-f0-9]{64,}|sb_secret_[A-Za-z0-9_\-]{20,}|vercel_(?:pat|tok|secret)_[A-Za-z0-9_\-]{20,}|vc[pk]_[A-Za-z0-9_\-]{24,}|dapi[0-9a-fA-F]{32}(?:-\d)?)\b/g, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/(\b(?:AccountKey|SharedAccessKey|SharedAccessSignature)=)([^\s;'"`\]\}]{16,})()/gi, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/([?&]sig=)([A-Za-z0-9%+\/=]{24,})()/gi, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/(\bAuthorization\s*:\s*Basic\s+)([A-Za-z0-9+\/=]{8,})()/gi, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/(\bBearer\s+)([A-Za-z0-9_\-\.~+\/]{12,}=*)()/gi, "API_KEY", "<API_KEY_{index}>");
@@ -851,10 +857,37 @@
       replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:password|passwd|passphrase|pwd|pass|pw|pin|otp|cvv|cvc)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined|nan|yes|no|pass)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{3,})(['"`]?)/gi, "DB_PASS", "[DB_PASS_{index}]");
       replaceQuotedSecret(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|access[_-]?key|session[_-]?id|token|secret|apikey|cookie|jwt)|ak|sk|pk|tk)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d)))(['"`])([^'"`\r\n]{4,})(\2)/gi, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:(?:db|app|api|auth|user|usr|root|admin|client|access|secret|private|refresh|session|jwt|mysql|pg|postgres|redis|mongo|smtp|ftp|ssh|aws|gcp|azure|login|master|service|webhook|proxy|mail|email|token|key)?(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|app[_-]?secret|access[_-]?key|session[_-]?id|token|secret|apikey|cookie|jwt)|ak|sk|pk|tk)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{4,})(['"`]?)/gi, "API_KEY", "<API_KEY_{index}>");
+      replaceQuotedSecret(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:(?:service[_-]?role|anon|signing|encryption|decrypt|master|hmac|webhook|cloudflare|supabase|vercel|databricks|telegram|resend|twilio|stripe|openai|anthropic|gemini|github|gitlab|aws|gcp|azure)[_-]?(?:api[_-]?|auth[_-]?|access[_-]?|bot[_-]?|pat[_-]?|client[_-]?|private[_-]?|admin[_-]?)?(?:key|secret|token|pass(?:word)?|pwd|dsn|cred(?:ential)?s?)|x[-_]api[-_]key|connection[_-]?string|conn[_-]?str|auth[_-]?secret|signing[_-]?secret|webhook[_-]?secret|api[_-]?secret|signature)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d)))(['"`])(?![\$\{])([^'"`\r\n]{6,})(\2)/gi, "API_KEY", "<API_KEY_{index}>");
+      replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;_\-\.?&]))(?:(?:service[_-]?role|anon|signing|encryption|decrypt|master|hmac|webhook|cloudflare|supabase|vercel|databricks|telegram|resend|twilio|stripe|openai|anthropic|gemini|github|gitlab|aws|gcp|azure)[_-]?(?:api[_-]?|auth[_-]?|access[_-]?|bot[_-]?|pat[_-]?|client[_-]?|private[_-]?|admin[_-]?)?(?:key|secret|token|pass(?:word)?|pwd|dsn|cred(?:ential)?s?)|x[-_]api[-_]key|connection[_-]?string|conn[_-]?str|auth[_-]?secret|signing[_-]?secret|webhook[_-]?secret|api[_-]?secret|signature)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined|nan|yes|no|int|str|string|bool|float|number|object|array|auto|default|void|return|break|continue|pass)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{6,})(['"`]?)/gi, "API_KEY", "<API_KEY_{index}>");
       replacePrefixSecretSuffix(/(['"`]?\b(?:ic|nric|mykad|id_no|ic_no|no_kp|ssn|tin|tax_id|ssm|ssm_no)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)([A-Za-z0-9\-]{6,20})(['"`]?)/gi, "ID_CARD", "[ID_CARD_{index}]");
       replacePrefixSecretSuffix(/(['"`]?\b(?:hp|tel|mobile|phone|handphone|whatsapp)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(\+?[0-9][0-9\-]{6,15})(['"`]?)/gi, "PHONE", "[PHONE_{index}]");
       replaceQuotedSecret(/((?:^|(?<=[\s'"`(\[{,;\-\.?&]))(?:id|uid|uuid|sid|usr|user|uname|username|login|acct|account|user[ _\-]?id|client[ _\-]?id|app[ _\-]?id|account[ _\-]?id)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d)))(['"`])([^'"`\r\n]{2,})(\2)/gi, "USER_ID", "[USER_ID_{index}]");
       replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;\-\.?&]))(?:id|uid|uuid|sid|usr|user|uname|username|login|acct|account|user[ _\-]?id|client[ _\-]?id|app[ _\-]?id|account[ _\-]?id)\b['"`]?(?:[ \t]*[:=：][ \t]*|[ \t]+\-[ \t]+|-(?=[A-Za-z0-9_]*\d))['"`]?)(?![\$\{\(\[])(?!(?:true|false|null|none|nil|undefined)\b)(?!\w+\()([^\s#;,&)'"`\]\}\r\n]{2,})(['"`]?)/gi, "USER_ID", "[USER_ID_{index}]");
+
+      var entropyEl = document.getElementById("chkEntropy");
+      if (entropyEl && entropyEl.checked) {
+        function shannonEntropy(v) {
+          var counts = Object.create(null);
+          for (var idx = 0; idx < v.length; idx++) counts[v.charAt(idx)] = (counts[v.charAt(idx)] || 0) + 1;
+          var ent = 0;
+          var keys = Object.keys(counts);
+          for (var k = 0; k < keys.length; k++) {
+            var p = counts[keys[k]] / v.length;
+            ent -= p * Math.log2(p);
+          }
+          return ent;
+        }
+        function isHighEntropy(v) {
+          if (!v || v.length < 20 || v.length > 128) return false;
+          if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(v)) return false;
+          var uniq = Object.create(null);
+          for (var i2 = 0; i2 < v.length; i2++) uniq[v.charAt(i2)] = 1;
+          if (Object.keys(uniq).length < 8) return false;
+          if (/^[0-9a-fA-F]{32,128}$/.test(v)) return shannonEntropy(v) >= 3.0;
+          return /[A-Za-z]/.test(v) && /\d/.test(v) && shannonEntropy(v) >= 3.6;
+        }
+        replacePrefixSecretSuffix(/((?:^|(?<=[\s'"`(\[{,;?&]))(?!(?:commit|sha|sha1|sha256|md5|hash|etag|version|uuid|guid|trace[_-]?id|request[_-]?id|correlation[_-]?id|span[_-]?id|url|uri|path|href|src|checksum|digest|integrity|class|type|id|name)\b['"`]?[ \t]*[:=])[A-Za-z_][A-Za-z0-9_.\-]{1,63}['"`]?[ \t]*[:=][ \t]*['"`]?)([A-Za-z0-9+\/=_\-]{20,128})(['"`]?)(?=[\s#;,&)'"`\]\}\r\n]|$)/gi, "HIGH_ENTROPY", "<HIGH_ENTROPY_{index}>", isHighEntropy);
+      }
 
       var sKeys = Object.keys(sentinelToPh);
       for (i = 0; i < sKeys.length; i++) {
@@ -1330,6 +1363,8 @@
       document.getElementById("lblBrandSub").textContent = isZh ? "100% 浏览器内存 (RAM) 运行 · 零网络请求 · 零 localStorage 落盘 · 关页即焚" : "100% Browser RAM · Zero Network · Zero localStorage · Wipes on Close";
       document.getElementById("lblSemanticIp").textContent = isZh ? "🌐 语义伪装" : "🌐 Semantic Mode";
       document.getElementById("lblAiHint").textContent = isZh ? "🤖 AI 防变形提示" : "🤖 AI Hint";
+      var entLbl = document.getElementById("lblEntropy");
+      if (entLbl) entLbl.textContent = isZh ? "🧬 高熵兜底" : "🧬 High-Entropy";
       document.getElementById("btnTheme").textContent = currentTheme === "dark" ? (isZh ? "☀️ 浅色模式" : "☀️ Light Mode") : (isZh ? "🌙 暗色模式" : "🌙 Dark Mode");
       document.getElementById("lblSecBanner").innerHTML = isZh
         ? '<span class="security-highlight">🔒 零残留承诺 (Zero-Storage + CSP)：</span> 已启用浏览器级 CSP (`connect-src \'none\'`) 禁止一切外发请求；所有密码与映射仅驻留当前标签页 RAM，绝不写入 localStorage / Cookie，关页即焚。'
@@ -1354,7 +1389,7 @@
       document.getElementById("optCatClient").textContent = isZh ? "CLIENT (客户)" : "CLIENT";
       document.getElementById("optCatProject").textContent = isZh ? "PROJECT (项目)" : "PROJECT";
       document.getElementById("optCatSecret").textContent = isZh ? "CUSTOM_SECRET (机密)" : "CUSTOM_SECRET";
-      document.getElementById("inpCustomWord").placeholder = isZh ? "输入公司名 Sdn Bhd / 客户名（逗号分隔可批量添加）..." : "Enter company / client / project names (comma-separated)...";
+      document.getElementById("inpCustomWord").placeholder = isZh ? "输入公司名 / 客户名（逗号分隔可批量添加）..." : "Enter company / client / project names (comma-separated)...";
       document.getElementById("btnAddWord").textContent = isZh ? "➕ 添加" : "➕ Add";
       document.getElementById("lblAllowlistSub").textContent = isZh ? "2. 🛡️ 白名单 Allowlist（点击差异高亮芯片亦可一键加入）" : "2. 🛡️ Allowlist (Click diff chips to allowlist instantly)";
       document.getElementById("btnRestoreAllow").textContent = isZh ? "↺ 恢复默认安全白名单" : "↺ Restore Default Safe Allowlist";

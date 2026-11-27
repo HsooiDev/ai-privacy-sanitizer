@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+PackageIdentifier: HsooiDev.AIPrivacySanitizer
+PackageVersion: 0.6.0
+PackageLocale: en-US
+Publisher: HsooiDev
+PublisherUrl: https://github.com/HsooiDev/ai-privacy-sanitizer
+PackageName: AI Privacy Sanitizer
+PackageUrl: https://github.com/HsooiDev/ai-privacy-sanitizer
+License: MIT
+LicenseUrl: https://github.com/HsooiDev/ai-privacy-sanitizer/blob/main/LICENSE
+ShortDescription: 100% local clipboard, file, and browser privacy sanitizer & lossless restorer for AI prompts.
+Tags:
+  - privacy
+  - sanitizer
+  - security
+  - clipboard
+  - llm
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/HsooiDev/ai-privacy-sanitizer/releases/download/v0.6.0/Sanitizer.exe
+    InstallerSha256: REPLACE_WITH_RELEASE_SHA256
+    Commands:
+      - sanitizer
+ManifestType: singleton
+ManifestVersion: 1.6.0
